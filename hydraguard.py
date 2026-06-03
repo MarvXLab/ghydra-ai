@@ -11,7 +11,7 @@ import plotly.express as px
 MODELS_DIR = 'models'
 
 st.set_page_config(
-    page_title='HydraGuard - AI Threat Detection',
+    page_title='Ghydra - AI Threat Detection',
     page_icon='🐍',
     layout='wide',
     initial_sidebar_state='expanded'
@@ -134,14 +134,14 @@ st.markdown("""
     }
     
     /* Sidebar branding */
-    .hydra-brand {
+    .ghydra-brand {
         text-align: center;
         padding: 20px 0;
         border-bottom: 1px solid #2d3748;
         margin-bottom: 20px;
     }
     
-    .hydra-logo {
+    .ghydra-logo {
         font-size: 28px;
         font-weight: 800;
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -150,7 +150,7 @@ st.markdown("""
         margin-bottom: 4px;
     }
     
-    .hydra-tagline {
+    .ghydra-tagline {
         font-size: 11px;
         color: #718096;
         text-transform: uppercase;
@@ -205,9 +205,9 @@ st.markdown("""
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("""
-    <div class="hydra-brand">
-        <div class="hydra-logo">🐍 HydraGuard</div>
-        <div class="hydra-tagline">AI Threat Detection</div>
+    <div class="ghydra-brand">
+        <div class="ghydra-logo">🐍 Ghydra</div>
+        <div class="ghydra-tagline">AI Threat Detection</div>
     </div>
     """, unsafe_allow_html=True)
     
@@ -333,7 +333,7 @@ def simulate_realtime_data():
 
 # ── Page: Overview ────────────────────────────────────────────────────────────
 if page == "🏠 Overview":
-    st.markdown("# HydraGuard Threat Detection System")
+    st.markdown("# Ghydra Threat Detection System")
     st.markdown("**Multi-headed AI defense against cyber threats • Real-time network monitoring • Advanced deep learning**")
     
     results = load_eval()
@@ -624,7 +624,7 @@ elif page == "🧠 Model Insights":
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #718096; font-size: 12px; padding: 20px;">
-    🐍 <strong>HydraGuard</strong> • Multi-headed AI Threat Detection • 
+    🐍 <strong>Ghydra</strong> • Multi-headed AI Threat Detection • 
     Powered by Deep Learning & Real-time Analytics
 </div>
 """, unsafe_allow_html=True)

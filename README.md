@@ -1,8 +1,8 @@
-# 🐍 HydraGuard - AI Threat Detection System
+# 🐍 Ghydra - AI Threat Detection System
 
 **Multi-headed AI defense against cyber threats**
 
-HydraGuard is an enterprise-grade cybersecurity threat detection system that uses advanced deep learning to analyze network traffic and identify cyber threats in real-time. Built with a 3-layer neural network trained on the NSL-KDD benchmark dataset.
+Ghydra is an enterprise-grade cybersecurity threat detection system that uses advanced deep learning to analyze network traffic and identify cyber threats in real-time. Built with a 3-layer neural network trained on the NSL-KDD benchmark dataset.
 
 ## 🚀 Key Features
 
@@ -48,18 +48,18 @@ Python 3.10+
 pip install -r requirements.txt
 ```
 
-### Launch HydraGuard
+### Launch Ghydra
 ```bash
 # Local deployment
-streamlit run hydraguard.py
+streamlit run ghydra.py
 
-# Or use auto-setup
-streamlit run app.py
+# Or direct dashboard
+streamlit run hydraguard.py
 ```
 
 ### Cloud Deployment
 1. **GitHub**: Push to repository
-2. **Streamlit Cloud**: Connect repo → Deploy `app.py`
+2. **Streamlit Cloud**: Connect repo → Deploy `ghydra.py`
 3. **Heroku**: `git push heroku main`
 
 ## 🎨 Dashboard Pages
@@ -137,7 +137,7 @@ models/
 
 ## 📱 Mobile Experience
 
-HydraGuard is fully responsive with:
+Ghydra is fully responsive with:
 - Touch-optimized controls
 - Mobile-first metric cards  
 - Swipe navigation
@@ -167,5 +167,5 @@ MIT License - see LICENSE file for details
 
 ---
 
-**🐍 HydraGuard** - *Where AI meets cybersecurity*  
+**🐍 Ghydra** - *Where AI meets cybersecurity*  
 Built with ❤️ for the security community

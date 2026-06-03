@@ -1,0 +1,79 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    @apply bg-surface-900 text-slate-200 font-sans antialiased;
+    margin: 0;
+  }
+  body.light {
+    @apply bg-light-bg text-light-text;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-surface-400 rounded; }
+}
+
+@layer components {
+  /* Shared card */
+  .card {
+    @apply bg-surface-700 border border-surface-400 rounded-lg;
+  }
+  .card-light {
+    @apply bg-light-surface border border-light-border rounded-lg;
+  }
+
+  /* Nav link */
+  .nav-link {
+    @apply flex items-center gap-3 px-3 py-2 rounded text-slate-400
+           hover:text-slate-100 hover:bg-surface-500
+           transition-colors text-sm font-medium;
+  }
+  .nav-link.active {
+    @apply text-accent bg-accent-muted;
+  }
+
+  /* Threat badge */
+  .badge-critical { @apply bg-threat-critical/10 text-threat-critical border border-threat-critical/30 text-xs px-2 py-0.5 rounded; }
+  .badge-high     { @apply bg-threat-high/10 text-threat-high border border-threat-high/30 text-xs px-2 py-0.5 rounded; }
+  .badge-medium   { @apply bg-threat-medium/10 text-threat-medium border border-threat-medium/30 text-xs px-2 py-0.5 rounded; }
+  .badge-low      { @apply bg-threat-low/10 text-threat-low border border-threat-low/30 text-xs px-2 py-0.5 rounded; }
+
+  /* Terminal */
+  .terminal {
+    @apply bg-surface-900 border border-surface-400 rounded-lg font-mono text-xs
+           overflow-hidden;
+  }
+  .terminal-bar {
+    @apply flex items-center gap-1.5 px-4 py-2 border-b border-surface-400 bg-surface-800;
+  }
+  .terminal-dot {
+    @apply w-2.5 h-2.5 rounded-full;
+  }
+  .terminal-body {
+    @apply p-4 h-64 overflow-y-auto text-green-400 leading-relaxed;
+  }
+
+  /* Stat card */
+  .stat-card {
+    @apply card p-5 flex flex-col gap-1;
+  }
+
+  /* Primary button */
+  .btn-primary {
+    @apply bg-accent hover:bg-accent-dim text-white font-medium px-5 py-2.5 rounded
+           transition-colors text-sm;
+  }
+
+  /* Outline button */
+  .btn-outline {
+    @apply border border-accent text-accent hover:bg-accent-muted font-medium px-5 py-2.5 rounded
+           transition-colors text-sm;
+  }
+}

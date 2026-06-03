@@ -7,12 +7,19 @@ import matplotlib.ticker as mticker
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import plotly.express as px
+from PIL import Image
 
 MODELS_DIR = 'models'
 
+# Load custom logo
+try:
+    logo = Image.open('GhydraLogo.png')
+except:
+    logo = None
+
 st.set_page_config(
     page_title='Ghydra AI Security Platform',
-    page_icon='⚔️',
+    page_icon=logo if logo else '⚔️',
     layout='wide',
     initial_sidebar_state='expanded'
 )
@@ -204,12 +211,24 @@ st.markdown("""
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("""
-    <div class="ghydra-brand">
-        <div class="ghydra-logo">⚔️ GHYDRA</div>
-        <div class="ghydra-tagline">AI SECURITY PLATFORM</div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Custom logo in sidebar
+    if logo:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.image(logo, width=100)
+        st.markdown("""
+        <div class="ghydra-brand">
+            <div class="ghydra-logo">GHYDRA</div>
+            <div class="ghydra-tagline">AI SECURITY PLATFORM</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div class="ghydra-brand">
+            <div class="ghydra-logo">⚔️ GHYDRA</div>
+            <div class="ghydra-tagline">AI SECURITY PLATFORM</div>
+        </div>
+        """, unsafe_allow_html=True)
     
     # System status indicator
     st.markdown("""
@@ -224,7 +243,7 @@ with st.sidebar:
     # Navigation menu
     st.markdown("### NAVIGATION")
     page = st.radio("", [
-        "⚔️ Security Dashboard",
+        "🛡️ Security Dashboard",
         "🔍 Threat Scanner", 
         "📈 Performance Analytics",
         "🧠 AI Model Status",
@@ -378,34 +397,66 @@ def simulate_advanced_threats():
 
 
 # ── Page: Security Dashboard ────────────────────────────────────────────────────────────────────────────────────
-if page == "⚔️ Security Dashboard":
+if page == "🛡️ Security Dashboard":
     # Professional header with security styling
-    st.markdown("""
-    <div style="
-        background: linear-gradient(135deg, #1a202c 0%, #2d3748 100%);
-        border: 1px solid #4a5568;
-        border-radius: 16px;
-        padding: 32px;
-        margin-bottom: 24px;
-        text-align: center;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-    ">
-        <h1 style="
-            font-size: 36px;
-            margin-bottom: 8px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            font-weight: 800;
-        ">⚔️ GHYDRA AI SECURITY PLATFORM</h1>
-        <p style="
-            color: #a0aec0;
-            font-size: 16px;
-            margin: 0;
-            font-weight: 500;
-        ">Enterprise-grade cybersecurity with multi-layered AI threat detection</p>
-    </div>
-    """, unsafe_allow_html=True)
+    if logo:
+        col1, col2, col3 = st.columns([1, 3, 1])
+        with col1:
+            st.image(logo, width=80)
+        with col2:
+            st.markdown("""
+            <div style="
+                background: linear-gradient(135deg, #1a202c 0%, #2d3748 100%);
+                border: 1px solid #4a5568;
+                border-radius: 16px;
+                padding: 32px;
+                margin-bottom: 24px;
+                text-align: center;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            ">
+                <h1 style="
+                    font-size: 36px;
+                    margin-bottom: 8px;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                    font-weight: 800;
+                ">GHYDRA AI SECURITY PLATFORM</h1>
+                <p style="
+                    color: #a0aec0;
+                    font-size: 16px;
+                    margin: 0;
+                    font-weight: 500;
+                ">Enterprise-grade cybersecurity with multi-layered AI threat detection</p>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #1a202c 0%, #2d3748 100%);
+            border: 1px solid #4a5568;
+            border-radius: 16px;
+            padding: 32px;
+            margin-bottom: 24px;
+            text-align: center;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        ">
+            <h1 style="
+                font-size: 36px;
+                margin-bottom: 8px;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                font-weight: 800;
+            ">⚔️ GHYDRA AI SECURITY PLATFORM</h1>
+            <p style="
+                color: #a0aec0;
+                font-size: 16px;
+                margin: 0;
+                font-weight: 500;
+            ">Enterprise-grade cybersecurity with multi-layered AI threat detection</p>
+        </div>
+        """, unsafe_allow_html=True)
     
     results = load_eval()
     if not results:
@@ -743,11 +794,22 @@ elif page == "🧠 AI Model Status":
     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig, use_container_width=True)
 
-# Add footer
+# Add footer with logo
 st.markdown("---")
-st.markdown("""
-<div style="text-align: center; color: #718096; font-size: 12px; padding: 20px;">
-    ⚔️ <strong>GHYDRA AI SECURITY PLATFORM</strong> • Enterprise Threat Detection • 
-    Powered by Advanced Machine Learning & Real-time Analytics
-</div>
-""", unsafe_allow_html=True)
+if logo:
+    col1, col2, col3 = st.columns([2, 1, 2])
+    with col2:
+        st.image(logo, width=50)
+    st.markdown("""
+    <div style="text-align: center; color: #718096; font-size: 12px; padding: 20px;">
+        <strong>GHYDRA AI SECURITY PLATFORM</strong> • Enterprise Threat Detection • 
+        Powered by Advanced Machine Learning & Real-time Analytics
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+    <div style="text-align: center; color: #718096; font-size: 12px; padding: 20px;">
+        ⚔️ <strong>GHYDRA AI SECURITY PLATFORM</strong> • Enterprise Threat Detection • 
+        Powered by Advanced Machine Learning & Real-time Analytics
+    </div>
+    """, unsafe_allow_html=True)

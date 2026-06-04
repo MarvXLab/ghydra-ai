@@ -1,6 +1,11 @@
 import os
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import sessionmaker
+import sys
+
+# Add backend to path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from models.database import Base
 
 # Database URL from environment

@@ -4,14 +4,20 @@ import time
 import threading
 import hashlib
 import asyncio
+import sys
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import numpy as np
 import httpx
-import geoip2.database
-import geoip2.errors
+try:
+    import geoip2.database
+    import geoip2.errors
+except ImportError:
+    geoip2 = None
+
 from fastapi import FastAPI, HTTPException, Request, Depends, status, BackgroundTasks
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +28,12 @@ from pydantic import BaseModel, EmailStr, field_validator, HttpUrl
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.orm import selectinload
+
+# Add backend to Python path
+BACKEND_DIR = Path(__file__).parent
+PROJECT_DIR = BACKEND_DIR.parent
+MODELS_DIR  = str(PROJECT_DIR / "models")
+sys.path.insert(0, str(BACKEND_DIR))
 
 # Local imports
 from database.connection import get_db, init_db, close_db
@@ -71,10 +83,6 @@ app.add_middleware(
     allow_credentials=True,
 )
 
-# ── Global State ─────────────────────────────────────────────────
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODELS_DIR = os.path.join(BASE_DIR, "models")
-
 # ML Model (pre-trained, loaded once)
 model = None
 scaler = None
@@ -84,12 +92,13 @@ model_loaded = False
 # Security services
 security = HTTPBearer(auto_error=False)
 
-# GeoIP database (optional - download MaxMind GeoLite2 database)
+# GeoIP database (optional)
 geoip_db = None
 try:
-    geoip_db_path = os.path.join(BASE_DIR, "GeoLite2-City.mmdb")
-    if os.path.exists(geoip_db_path):
-        geoip_db = geoip2.database.Reader(geoip_db_path)
+    if geoip2 is not None:
+        geoip_db_path = os.path.join(str(BACKEND_DIR.parent), "GeoLite2-City.mmdb")
+        if os.path.exists(geoip_db_path):
+            geoip_db = geoip2.database.Reader(geoip_db_path)
 except Exception:
     pass
 
@@ -104,16 +113,19 @@ def load_ml_model():
     
     if all(os.path.exists(p) for p in [mp, sp, ep]):
         try:
-            with open(mp, "rb") as f: model = pickle.load(f)
-            with open(sp, "rb") as f: scaler = pickle.load(f)
+            with open(mp, "rb") as f: model    = pickle.load(f)
+            with open(sp, "rb") as f: scaler   = pickle.load(f)
             with open(ep, "rb") as f: encoders = pickle.load(f)
             model_loaded = True
+            print("ML model loaded successfully")
         except Exception as e:
             print(f"Failed to load model: {e}")
+    else:
+        print("No pre-trained model found — will train on demand")
 
 def get_geolocation(ip: str) -> Dict[str, Any]:
     """Get geolocation data for IP address"""
-    if not geoip_db:
+    if not geoip_db or geoip2 is None:
         return {}
     
     try:
@@ -124,8 +136,6 @@ def get_geolocation(ip: str) -> Dict[str, Any]:
             "latitude": float(response.location.latitude) if response.location.latitude else None,
             "longitude": float(response.location.longitude) if response.location.longitude else None,
         }
-    except geoip2.errors.AddressNotFoundError:
-        return {}
     except Exception:
         return {}
 

@@ -108,7 +108,7 @@ def hash_password(p: str) -> str:           return bcrypt.hashpw(p.encode(), bcr
 def verify_password(p: str, h: str) -> bool: return bcrypt.checkpw(p.encode(), h.encode())
 
 def create_access_token(data: dict) -> str:
-    payload = {**data, "exp": datetime.now(timezone.utc) + timedelta(minutes=30), "type": "access"}
+    payload = {**data, "exp": datetime.now(timezone.utc) + timedelta(hours=24), "type": "access"}
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
 def create_refresh_token(data: dict) -> str:
@@ -452,7 +452,7 @@ async def model_log():
     return _training_state
 
 @app.post("/model/train")
-async def model_train(current_user: User = Depends(require_user)):
+async def model_train():
     if model_loaded: raise HTTPException(400, detail="Model already trained")
     if _training_state["status"] == "training": raise HTTPException(400, detail="Training already in progress")
     threading.Thread(target=_run_training, daemon=True).start()

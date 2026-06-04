@@ -4,10 +4,11 @@ from sqlalchemy.orm import sessionmaker
 from models.database import Base
 
 # Database URL from environment
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
-    "postgresql://neondb_owner:npg_NFpRkXj4ef6t@ep-empty-wind-aqk551sp-pooler.c-8.us-east-1.aws.neon.tech/neondb?sslmode=require"
-).replace("postgresql://", "postgresql+asyncpg://")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is required")
+
+DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
 
 # Create async engine
 engine = create_async_engine(

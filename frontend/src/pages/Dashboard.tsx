@@ -1,160 +1,328 @@
-import { useEffect, useState } from 'react'
-import Sidebar from '../components/Sidebar'
-import StatCard from '../components/StatCard'
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import AppLayout from '../components/AppLayout'
 import { useTheme } from '../lib/theme'
 import api from '../lib/api'
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
-interface Threat {
-  ip: string
-  threat: boolean
-  score: number
-  flags: string[]
-  ts: number
-}
-
-interface Analytics {
+interface DashboardStats {
   total_scans: number
-  threats_blocked: number
-  clean_requests: number
+  threats_found: number
+  clean_scans: number
   threat_rate: number
-}
-
-// Simulated chart history until real data comes in
-function buildChartData(threats: Threat[]) {
-  const buckets: Record<string, { time: string; threats: number; clean: number }> = {}
-  threats.forEach(t => {
-    const d = new Date(t.ts * 1000)
-    const key = `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
-    if (!buckets[key]) buckets[key] = { time: key, threats: 0, clean: 0 }
-    t.threat ? buckets[key].threats++ : buckets[key].clean++
-  })
-  return Object.values(buckets).slice(-12)
+  recent_scans: Array<{
+    id: string
+    type: string
+    target: string
+    is_threat: boolean
+    threat_score: number
+    created_at: string
+    geolocation?: {
+      country: string
+      city: string
+    }
+  }>
+  model_status: string
 }
 
 export default function Dashboard() {
   const { theme } = useTheme()
+  const navigate = useNavigate()
   const dark = theme === 'dark'
-
-  const [analytics, setAnalytics] = useState<Analytics | null>(null)
-  const [threats, setThreats]     = useState<Threat[]>([])
-  const [modelLoaded, setModelLoaded] = useState(false)
+  
+  const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [user, setUser] = useState<any>(null)
 
   useEffect(() => {
-    const fetchAll = async () => {
-      try {
-        const [ana, feed, status] = await Promise.all([
-          api.get('/analytics'),
-          api.get('/threats/feed'),
-          api.get('/model/status'),
-        ])
-        setAnalytics(ana.data)
-        setThreats(feed.data.threats)
-        setModelLoaded(status.data.loaded)
-      } catch { /* backend may be cold-starting */ }
+    // Check authentication
+    const token = localStorage.getItem('access_token')
+    const userData = localStorage.getItem('user')
+    
+    if (!token || !userData) {
+      navigate('/auth/login')
+      return
     }
-    fetchAll()
-    const id = setInterval(fetchAll, 5000)
-    return () => clearInterval(id)
-  }, [])
 
-  const chartData = buildChartData(threats)
+    setUser(JSON.parse(userData))
+    api.defaults.headers.common['Authorization'] = `Bearer ${token}`
+    
+    fetchDashboardStats()
+  }, [navigate])
 
-  const text     = dark ? 'text-slate-100' : 'text-light-text'
-  const muted    = dark ? 'text-slate-500' : 'text-light-muted'
-  const rowHover = dark ? 'hover:bg-surface-600' : 'hover:bg-slate-50'
+  const fetchDashboardStats = async () => {
+    try {
+      const response = await api.get('/dashboard/stats')
+      setStats(response.data)
+    } catch (error) {
+      console.error('Failed to fetch stats:', error)
+    }
+    setLoading(false)
+  }
+
+  const formatTime = (dateStr: string) => {
+    return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+
+  const getSeverityColor = (score: number) => {
+    if (score >= 0.7) return 'text-red-500'
+    if (score >= 0.4) return 'text-orange-500'
+    if (score >= 0.2) return 'text-yellow-500'
+    return 'text-green-500'
+  }
+
+  if (loading) {
+    return (
+      <AppLayout>
+        <div className={`min-h-screen flex items-center justify-center ${dark ? 'bg-surface-900' : 'bg-light-bg'}`}>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent"></div>
+        </div>
+      </AppLayout>
+    )
+  }
 
   return (
-    <div className={`flex min-h-screen ${dark ? 'bg-surface-900' : 'bg-light-bg'}`}>
-      <Sidebar />
-
-      <main className="md:ml-56 flex-1 p-4 md:p-6 pt-16 md:pt-6 space-y-6">
+    <AppLayout>
+      <div className={`min-h-screen ${dark ? 'bg-surface-900' : 'bg-light-bg'} p-4 sm:p-6`}>
+        
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className={`text-xl font-bold ${text}`}>Dashboard</h1>
-            <p className={`text-xs mt-0.5 ${muted}`}>Live network analytics</p>
-          </div>
-          <div className={`flex items-center gap-2 text-xs font-mono border px-3 py-1.5 rounded
-            ${modelLoaded
-              ? 'border-green-500/30 text-green-400 bg-green-500/5'
-              : 'border-yellow-500/30 text-yellow-400 bg-yellow-500/5'}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${modelLoaded ? 'bg-green-400 animate-pulse-slow' : 'bg-yellow-400'}`} />
-            {modelLoaded ? 'AI Engine Active' : 'Model Not Loaded'}
-          </div>
-        </div>
-
-        {/* Stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard label="Total Scans"     value={analytics?.total_scans ?? '—'}     accent="blue" />
-          <StatCard label="Threats Blocked" value={analytics?.threats_blocked ?? '—'} accent="red" sub="requires model" />
-          <StatCard label="Clean Requests"  value={analytics?.clean_requests ?? '—'}  accent="green" />
-          <StatCard label="Threat Rate"     value={analytics ? `${(analytics.threat_rate * 100).toFixed(1)}%` : '—'} accent="yellow" />
-        </div>
-
-        {/* Chart */}
-        <div className={`card ${!dark && 'card-light'} p-5`} style={{ background: dark ? '' : undefined }}>
-          <h2 className={`text-sm font-semibold mb-4 ${text}`}>Traffic Overview</h2>
-          {chartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={180}>
-              <AreaChart data={chartData}>
-                <XAxis dataKey="time" tick={{ fontSize: 10, fill: dark ? '#64748b' : '#94a3b8' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10, fill: dark ? '#64748b' : '#94a3b8' }} axisLine={false} tickLine={false} />
-                <Tooltip
-                  contentStyle={{ background: dark ? '#111520' : '#fff', border: `1px solid ${dark ? '#2d3650' : '#e2e8f0'}`, borderRadius: 6, fontSize: 12 }}
-                  labelStyle={{ color: dark ? '#94a3b8' : '#64748b' }}
-                />
-                <Area type="monotone" dataKey="clean"   stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.08} strokeWidth={1.5} />
-                <Area type="monotone" dataKey="threats" stroke="#ef4444" fill="#ef4444" fillOpacity={0.08} strokeWidth={1.5} />
-              </AreaChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className={`h-44 flex items-center justify-center text-sm ${muted}`}>
-              No traffic data yet — run a scan to populate.
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <h1 className={`text-xl sm:text-2xl font-bold ${dark ? 'text-slate-100' : 'text-light-text'}`}>
+                Welcome Back
+              </h1>
+              <p className={`text-sm ${dark ? 'text-slate-400' : 'text-light-muted'}`}>
+                {user?.full_name || 'User'}
+              </p>
             </div>
-          )}
+            
+            {/* Status Badge */}
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border
+              ${stats?.model_status === 'active'
+                ? 'bg-green-50 text-green-700 border-green-200'
+                : 'bg-yellow-50 text-yellow-700 border-yellow-200'
+              }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${stats?.model_status === 'active' ? 'bg-green-400' : 'bg-yellow-400'}`} />
+              {stats?.model_status === 'active' ? 'Protected' : 'Offline'}
+            </div>
+          </div>
         </div>
 
-        {/* Recent threats table */}
-        <div className={`${dark ? 'card' : 'card-light'}`}>
-          <div className={`px-5 py-3.5 border-b ${dark ? 'border-surface-400' : 'border-light-border'} flex items-center justify-between`}>
-            <h2 className={`text-sm font-semibold ${text}`}>Recent Threats</h2>
-            <span className={`text-xs ${muted}`}>{threats.filter(t => t.threat).length} flagged</span>
+        {/* Quick Stats Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          
+          {/* Total Scans */}
+          <div className={`p-4 rounded-2xl ${dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-light-border shadow-sm'}`}>
+            <div className="flex items-center justify-between mb-2">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${dark ? 'bg-blue-500/10' : 'bg-blue-50'}`}>
+                <svg className="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 00-2-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+              </div>
+            </div>
+            <p className={`text-2xl font-bold ${dark ? 'text-slate-100' : 'text-gray-900'}`}>
+              {stats?.total_scans || 0}
+            </p>
+            <p className={`text-xs ${dark ? 'text-slate-500' : 'text-gray-500'}`}>
+              Total Scans
+            </p>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className={`border-b ${dark ? 'border-surface-400 text-slate-500' : 'border-light-border text-light-muted'}`}>
-                  {['IP Address', 'Score', 'Flags', 'Severity', 'Time'].map(h => (
-                    <th key={h} className="text-left px-5 py-2.5 font-medium uppercase tracking-wider">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {threats.filter(t => t.threat).slice(0, 10).map((t, i) => {
-                  const sev = t.score > 0.7 ? 'critical' : t.score > 0.4 ? 'high' : 'medium'
-                  return (
-                    <tr key={i} className={`border-b ${dark ? 'border-surface-300' : 'border-light-border'} ${rowHover} transition-colors`}>
-                      <td className={`px-5 py-3 font-mono ${dark ? 'text-slate-300' : 'text-light-text'}`}>{t.ip}</td>
-                      <td className={`px-5 py-3 font-mono ${dark ? 'text-slate-300' : 'text-light-text'}`}>{t.score.toFixed(3)}</td>
-                      <td className={`px-5 py-3 ${muted}`}>{t.flags.join(', ') || '—'}</td>
-                      <td className="px-5 py-3"><span className={`badge-${sev}`}>{sev}</span></td>
-                      <td className={`px-5 py-3 font-mono ${muted}`}>{new Date(t.ts * 1000).toLocaleTimeString()}</td>
-                    </tr>
-                  )
-                })}
-                {threats.filter(t => t.threat).length === 0 && (
-                  <tr>
-                    <td colSpan={5} className={`px-5 py-8 text-center text-sm ${muted}`}>
-                      No threats detected yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+
+          {/* Threats Found */}
+          <div className={`p-4 rounded-2xl ${dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-light-border shadow-sm'}`}>
+            <div className="flex items-center justify-between mb-2">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${dark ? 'bg-red-500/10' : 'bg-red-50'}`}>
+                <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.464 0L4.35 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+              </div>
+            </div>
+            <p className={`text-2xl font-bold ${dark ? 'text-slate-100' : 'text-gray-900'}`}>
+              {stats?.threats_found || 0}
+            </p>
+            <p className={`text-xs ${dark ? 'text-slate-500' : 'text-gray-500'}`}>
+              Threats Found
+            </p>
+          </div>
+
+          {/* Clean Scans */}
+          <div className={`p-4 rounded-2xl ${dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-light-border shadow-sm'}`}>
+            <div className="flex items-center justify-between mb-2">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${dark ? 'bg-green-500/10' : 'bg-green-50'}`}>
+                <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+            </div>
+            <p className={`text-2xl font-bold ${dark ? 'text-slate-100' : 'text-gray-900'}`}>
+              {stats?.clean_scans || 0}
+            </p>
+            <p className={`text-xs ${dark ? 'text-slate-500' : 'text-gray-500'}`}>
+              Clean Scans
+            </p>
+          </div>
+
+          {/* Threat Rate */}
+          <div className={`p-4 rounded-2xl ${dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-light-border shadow-sm'}`}>
+            <div className="flex items-center justify-between mb-2">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${dark ? 'bg-purple-500/10' : 'bg-purple-50'}`}>
+                <svg className="w-4 h-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                </svg>
+              </div>
+            </div>
+            <p className={`text-2xl font-bold ${dark ? 'text-slate-100' : 'text-gray-900'}`}>
+              {((stats?.threat_rate || 0) * 100).toFixed(1)}%
+            </p>
+            <p className={`text-xs ${dark ? 'text-slate-500' : 'text-gray-500'}`}>
+              Threat Rate
+            </p>
           </div>
         </div>
-      </main>
-    </div>
+
+        {/* Quick Actions */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+          
+          {/* Scan Device */}
+          <button
+            onClick={() => navigate('/scan')}
+            className={`p-6 rounded-2xl text-left transition-all hover:scale-[1.02] active:scale-[0.98]
+              ${dark ? 'bg-gradient-to-br from-blue-600 to-blue-700' : 'bg-gradient-to-br from-blue-500 to-blue-600'} 
+              text-white shadow-lg`}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center">
+                <img 
+                  src="https://cdn-icons-png.flaticon.com/128/12785/12785948.png"
+                  alt="scan"
+                  className="w-6 h-6"
+                  style={{ filter: 'invert(1)' }}
+                />
+              </div>
+              <svg className="w-6 h-6 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </div>
+            <h3 className="font-semibold text-lg mb-1">Security Scan</h3>
+            <p className="text-sm opacity-80">Scan your device for threats</p>
+          </button>
+
+          {/* View Threats */}
+          <button
+            onClick={() => navigate('/threats')}
+            className={`p-6 rounded-2xl text-left transition-all hover:scale-[1.02] active:scale-[0.98]
+              ${dark ? 'bg-gradient-to-br from-red-600 to-red-700' : 'bg-gradient-to-br from-red-500 to-red-600'} 
+              text-white shadow-lg`}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center">
+                <img 
+                  src="https://cdn-icons-png.flaticon.com/128/1827/1827349.png"
+                  alt="alerts"
+                  className="w-6 h-6"
+                  style={{ filter: 'invert(1)' }}
+                />
+              </div>
+              <svg className="w-6 h-6 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </div>
+            <h3 className="font-semibold text-lg mb-1">Threat Alerts</h3>
+            <p className="text-sm opacity-80">View security incidents</p>
+          </button>
+        </div>
+
+        {/* Recent Activity */}
+        <div className={`rounded-2xl overflow-hidden ${dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-light-border shadow-sm'}`}>
+          
+          {/* Header */}
+          <div className="p-4 sm:p-6 border-b border-current border-opacity-10">
+            <div className="flex items-center justify-between">
+              <h2 className={`font-semibold ${dark ? 'text-slate-100' : 'text-gray-900'}`}>
+                Recent Scans
+              </h2>
+              <button className="text-accent text-sm font-medium">
+                View All
+              </button>
+            </div>
+          </div>
+
+          {/* Scan List */}
+          <div className="divide-y divide-current divide-opacity-10">
+            {stats?.recent_scans?.slice(0, 5).map((scan) => (
+              <div key={scan.id} className="p-4 sm:p-6">
+                <div className="flex items-center justify-between">
+                  
+                  {/* Left side */}
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    
+                    {/* Status Icon */}
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0
+                      ${scan.is_threat 
+                        ? 'bg-red-100 text-red-600' 
+                        : 'bg-green-100 text-green-600'
+                      }`}>
+                      {scan.is_threat ? (
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.464 0L4.35 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                        </svg>
+                      ) : (
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                      )}
+                    </div>
+
+                    {/* Info */}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <p className={`font-medium text-sm truncate ${dark ? 'text-slate-100' : 'text-gray-900'}`}>
+                          {scan.type === 'device' ? 'Device Scan' : 
+                           scan.type === 'url' ? 'URL Scan' : 'IP Scan'}
+                        </p>
+                        <span className={`text-xs px-2 py-0.5 rounded-full capitalize
+                          ${scan.is_threat 
+                            ? 'bg-red-100 text-red-700' 
+                            : 'bg-green-100 text-green-700'
+                          }`}>
+                          {scan.is_threat ? 'Threat' : 'Clean'}
+                        </span>
+                      </div>
+                      <p className={`text-xs truncate ${dark ? 'text-slate-400' : 'text-gray-500'}`}>
+                        {scan.geolocation ? `${scan.geolocation.city}, ${scan.geolocation.country}` : 'Unknown location'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Right side */}
+                  <div className="text-right shrink-0">
+                    <p className={`text-sm font-mono font-medium ${getSeverityColor(scan.threat_score)}`}>
+                      {(scan.threat_score * 100).toFixed(0)}%
+                    </p>
+                    <p className={`text-xs ${dark ? 'text-slate-500' : 'text-gray-400'}`}>
+                      {formatTime(scan.created_at)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {(!stats?.recent_scans || stats.recent_scans.length === 0) && (
+              <div className="p-8 text-center">
+                <svg className={`w-12 h-12 mx-auto mb-4 ${dark ? 'text-slate-600' : 'text-gray-300'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 01-2 2m-6 9l2 2 4-4" />
+                </svg>
+                <h3 className={`font-medium mb-1 ${dark ? 'text-slate-400' : 'text-gray-500'}`}>
+                  No scans yet
+                </h3>
+                <p className={`text-sm ${dark ? 'text-slate-500' : 'text-gray-400'}`}>
+                  Run your first security scan to get started
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </AppLayout>
   )
 }

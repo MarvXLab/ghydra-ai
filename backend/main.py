@@ -1,284 +1,560 @@
-import os, pickle, time, threading, hashlib
+import os
+import pickle
+import time
+import threading
+import hashlib
+import asyncio
+from datetime import datetime, timedelta, timezone
+from typing import Optional, List, Dict, Any
+from contextlib import asynccontextmanager
+
 import numpy as np
-from fastapi import FastAPI, HTTPException, Request
+import httpx
+import geoip2.database
+import geoip2.errors
+from fastapi import FastAPI, HTTPException, Request, Depends, status, BackgroundTasks
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from pydantic import BaseModel, field_validator
-from typing import Optional
+from pydantic import BaseModel, EmailStr, field_validator, HttpUrl
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, and_, or_
+from sqlalchemy.orm import selectinload
 
-# ── Rate limiter ─────────────────────────────────────────────────
-limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+# Local imports
+from database.connection import get_db, init_db, close_db
+from models.database import User, Scan, ThreatIntelligence, Project, SecurityEvent, TrafficLog, OTPCode
+from auth.security import (
+    hash_password, verify_password, create_access_token, create_refresh_token,
+    verify_token, generate_otp_code, verify_otp_code, generate_api_key
+)
+from services.email import email_service
 
-app = FastAPI(title="Ghydra Threat Detection API", docs_url=None, redoc_url=None)
+# ── App Lifecycle ────────────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await init_db()
+    load_ml_model()
+    yield
+    # Shutdown
+    await close_db()
+
+# ── Rate Limiter ─────────────────────────────────────────────────
+limiter = Limiter(key_func=get_remote_address, default_limits=["300/minute"])
+
+app = FastAPI(
+    title="Ghydra Threat Detection API",
+    description="Advanced AI-powered cybersecurity platform",
+    version="2.0.0",
+    docs_url=None,
+    redoc_url=None,
+    lifespan=lifespan
+)
+
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# ── CORS — only allow your Cloudflare domain + localhost dev ─────
+# ── CORS Configuration ───────────────────────────────────────────
 ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:4173"
+    "https://ghydra-ai.pages.dev,http://localhost:5173,http://localhost:4173"
 ).split(",")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Content-Type", "Authorization"],
+    allow_credentials=True,
 )
 
-BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# ── Global State ─────────────────────────────────────────────────
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
-# ── Global state ─────────────────────────────────────────────────
-model    = None
-scaler   = None
+# ML Model (pre-trained, loaded once)
+model = None
+scaler = None
 encoders = None
+model_loaded = False
 
-# Training lock — only ONE training job ever, across all requests
-_train_lock   = threading.Lock()
-_train_thread: Optional[threading.Thread] = None
+# Security services
+security = HTTPBearer(auto_error=False)
 
-training_state = {
-    "status":     "idle",   # idle | training | done | error
-    "progress":   0,
-    "log":        [],
-    "started_at": None,
-}
+# GeoIP database (optional - download MaxMind GeoLite2 database)
+geoip_db = None
+try:
+    geoip_db_path = os.path.join(BASE_DIR, "GeoLite2-City.mmdb")
+    if os.path.exists(geoip_db_path):
+        geoip_db = geoip2.database.Reader(geoip_db_path)
+except Exception:
+    pass
 
-# In-memory threat feed — capped at 500 entries to prevent memory abuse
-threat_feed: list[dict] = []
-MAX_FEED = 500
-
-# Per-IP scan cooldown: ip_hash -> last_scan_ts
-_scan_cooldown: dict[str, float] = {}
-SCAN_COOLDOWN_SECONDS = 10
-
-# ── Helpers ──────────────────────────────────────────────────────
-def load_artifacts() -> bool:
-    global model, scaler, encoders
+# ── Helper Functions ─────────────────────────────────────────────
+def load_ml_model():
+    """Load pre-trained ML model"""
+    global model, scaler, encoders, model_loaded
+    
     mp = os.path.join(MODELS_DIR, "threat_model_sklearn.pkl")
     sp = os.path.join(MODELS_DIR, "scaler.pkl")
     ep = os.path.join(MODELS_DIR, "encoders.pkl")
+    
     if all(os.path.exists(p) for p in [mp, sp, ep]):
-        with open(mp, "rb") as f: model    = pickle.load(f)
-        with open(sp, "rb") as f: scaler   = pickle.load(f)
-        with open(ep, "rb") as f: encoders = pickle.load(f)
-        return True
-    return False
+        try:
+            with open(mp, "rb") as f: model = pickle.load(f)
+            with open(sp, "rb") as f: scaler = pickle.load(f)
+            with open(ep, "rb") as f: encoders = pickle.load(f)
+            model_loaded = True
+        except Exception as e:
+            print(f"Failed to load model: {e}")
 
-def _train_background():
-    global model, scaler, encoders
-    import sys
-    sys.path.insert(0, BASE_DIR)
-
-    steps = [
-        ("Loading NSL-KDD dataset...",           5),
-        ("Parsing 125,973 training records...",  10),
-        ("Encoding categorical features...",     20),
-        ("Fitting StandardScaler...",            30),
-        ("Initialising MLP 256->128->64...",     35),
-        ("Epoch 1/100  loss=0.6821  acc=0.712",  45),
-        ("Epoch 10/100 loss=0.4103  acc=0.831",  52),
-        ("Epoch 20/100 loss=0.2841  acc=0.878",  60),
-        ("Epoch 35/100 loss=0.1992  acc=0.912",  68),
-        ("Epoch 50/100 loss=0.1544  acc=0.931",  75),
-        ("Epoch 65/100 loss=0.1301  acc=0.942",  80),
-        ("Epoch 80/100 loss=0.1178  acc=0.949",  85),
-        ("Early stopping at epoch 87...",        88),
-        ("Serialising model artefacts...",       93),
-        ("Running evaluation on test set...",    97),
-        ("Model ready. Accuracy: 97.4%",         100),
-    ]
-
-    training_state["status"]     = "training"
-    training_state["started_at"] = time.time()
-
+def get_geolocation(ip: str) -> Dict[str, Any]:
+    """Get geolocation data for IP address"""
+    if not geoip_db:
+        return {}
+    
     try:
-        from src.preprocess import load_data, preprocess
-        from sklearn.neural_network import MLPClassifier
-        from sklearn.model_selection import train_test_split
+        response = geoip_db.city(ip)
+        return {
+            "country": response.country.name,
+            "city": response.city.name,
+            "latitude": float(response.location.latitude) if response.location.latitude else None,
+            "longitude": float(response.location.longitude) if response.location.longitude else None,
+        }
+    except geoip2.errors.AddressNotFoundError:
+        return {}
+    except Exception:
+        return {}
 
-        for i, (msg, prog) in enumerate(steps):
-            training_state["log"].append(msg)
-            training_state["progress"] = prog
-            time.sleep(1.2 if i < 5 else 3.5 if i < 13 else 1.0)
-
-        train_df, test_df = load_data(
-            os.path.join(BASE_DIR, "data", "KDDTrain+.txt"),
-            os.path.join(BASE_DIR, "data", "KDDTest+.txt"),
-        )
-        X_train, y_train, _, _ = preprocess(train_df, test_df, MODELS_DIR)
-        X_tr, _, y_tr, _ = train_test_split(
-            X_train, y_train, test_size=0.1, random_state=42, stratify=y_train
-        )
-        clf = MLPClassifier(
-            hidden_layer_sizes=(256, 128, 64), activation="relu", solver="adam",
-            learning_rate_init=0.001, max_iter=100,
-            early_stopping=True, validation_fraction=0.1,
-            n_iter_no_change=5, random_state=42,
-        )
-        clf.fit(X_tr, y_tr)
-        os.makedirs(MODELS_DIR, exist_ok=True)
-        with open(os.path.join(MODELS_DIR, "threat_model_sklearn.pkl"), "wb") as f:
-            pickle.dump(clf, f)
-
-        load_artifacts()
-        training_state["status"]   = "done"
-        training_state["progress"] = 100
-    except Exception as e:
-        training_state["status"] = "error"
-        training_state["log"].append(f"ERROR: {e}")
-
-# Load persisted model on startup
-load_artifacts()
-
-# ── Routes ────────────────────────────────────────────────────────
-@app.get("/")
-@limiter.limit("60/minute")
-def root(request: Request):
-    return {"status": "ok", "model_loaded": model is not None}
-
-@app.get("/model/status")
-@limiter.limit("120/minute")
-def model_status(request: Request):
-    return {"loaded": model is not None, "training": training_state}
-
-@app.post("/model/train")
-@limiter.limit("3/hour")   # hard cap — max 3 train attempts per IP per hour
-def start_training(request: Request):
-    global _train_thread
-
-    # If model already on disk — just report done, refuse to retrain
-    if model is not None:
-        return {"message": "Model already trained", "status": "done"}
-
-    # Global lock: only one training job across the entire server lifetime
-    if not _train_lock.acquire(blocking=False):
-        raise HTTPException(503, "Training already in progress on this server. Poll /model/log for status.")
-
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_db)
+) -> Optional[User]:
+    """Get current authenticated user"""
+    if not credentials:
+        return None
+    
     try:
-        if training_state["status"] == "training":
-            _train_lock.release()
-            raise HTTPException(400, "Training already in progress")
-
-        training_state["log"]      = []
-        training_state["progress"] = 0
-        _train_thread = threading.Thread(target=_train_background, daemon=True)
-        _train_thread.start()
-        return {"message": "Training started"}
+        payload = verify_token(credentials.credentials)
+        user_id = payload.get("sub")
+        
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        
+        if not user or not user.is_active:
+            raise HTTPException(status_code=401, detail="Invalid user")
+        
+        return user
     except HTTPException:
-        _train_lock.release()
-        raise
-    finally:
-        # Release lock after thread starts so status can be polled
-        # Lock is intentionally NOT held during training — it just prevents
-        # duplicate thread spawns at the moment of the POST
-        if _train_lock.locked():
-            _train_lock.release()
+        return None
 
-@app.get("/model/log")
-@limiter.limit("120/minute")
-def get_log(request: Request):
-    return {
-        "log":      training_state["log"],
-        "progress": training_state["progress"],
-        "status":   training_state["status"],
-    }
+async def require_user(current_user: User = Depends(get_current_user)) -> User:
+    """Require authenticated user"""
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required"
+        )
+    return current_user
 
-class PredictRequest(BaseModel):
-    features: list[float]
-
-    @field_validator("features")
+# ── Pydantic Models ──────────────────────────────────────────────
+class UserRegister(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: str
+    
+    @field_validator("password")
     @classmethod
-    def check_length(cls, v):
-        if len(v) != 41:
-            raise ValueError("features must have exactly 41 values (NSL-KDD)")
+    def validate_password(cls, v):
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
         return v
 
-@app.post("/predict")
-@limiter.limit("100/minute")
-def predict(req: PredictRequest, request: Request):
-    if model is None:
-        raise HTTPException(503, "Model not loaded — activate it first")
-    x = np.array(req.features, dtype=np.float32).reshape(1, -1)
-    x = scaler.transform(x)
-    pred  = int(model.predict(x)[0])
-    proba = float(model.predict_proba(x)[0][1])
-    return {"threat": pred == 1, "confidence": round(proba, 4)}
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
 
-class ScanRequest(BaseModel):
-    ip:         Optional[str] = "127.0.0.1"
+class OTPVerify(BaseModel):
+    email: EmailStr
+    code: str
+
+class URLScanRequest(BaseModel):
+    url: HttpUrl
+    
+class IPScanRequest(BaseModel):
+    ip: str
+    
+class DeviceScanRequest(BaseModel):
     user_agent: Optional[str] = ""
-    referrer:   Optional[str] = ""
 
-    @field_validator("ip")
-    @classmethod
-    def sanitise_ip(cls, v):
-        # Truncate to prevent oversized payloads
-        return (v or "")[:45]
+class ProjectCreate(BaseModel):
+    name: str
+    domain: Optional[str] = None
+    webhook_url: Optional[HttpUrl] = None
 
-    @field_validator("user_agent")
-    @classmethod
-    def sanitise_ua(cls, v):
-        return (v or "")[:512]
-
-@app.post("/scan")
-@limiter.limit("30/minute")
-def scan_device(req: ScanRequest, request: Request):
-    # Per-IP cooldown — prevent scan hammering from same IP
-    ip_hash = hashlib.sha256((req.ip or "").encode()).hexdigest()[:16]
-    now = time.time()
-    last = _scan_cooldown.get(ip_hash, 0)
-    if now - last < SCAN_COOLDOWN_SECONDS:
-        raise HTTPException(429, f"Scan cooldown: wait {SCAN_COOLDOWN_SECONDS}s between scans")
-    _scan_cooldown[ip_hash] = now
-
-    # Prune cooldown dict if it grows large (>10k entries)
-    if len(_scan_cooldown) > 10_000:
-        cutoff = now - SCAN_COOLDOWN_SECONDS * 2
-        keys_to_del = [k for k, v in _scan_cooldown.items() if v < cutoff]
-        for k in keys_to_del:
-            del _scan_cooldown[k]
-
-    flags = []
-    score = 0.0
-
-    for sig in ["sqlmap", "nikto", "masscan", "nmap", "zgrab", "curl/"]:
-        if sig in (req.user_agent or "").lower():
-            flags.append(f"Suspicious user-agent: {sig}")
-            score += 0.4
-
-    private = ("10.", "192.168.", "172.16.", "127.", "::1", "localhost")
-    if not any((req.ip or "").startswith(p) for p in private):
-        score += 0.05
-
-    score = min(round(score, 3), 1.0)
-    threat = score > 0.3
-
-    result = {"ip": req.ip, "threat": threat, "score": score, "flags": flags}
-
-    if threat:
-        if len(threat_feed) >= MAX_FEED:
-            threat_feed.pop(0)   # drop oldest — bounded memory
-        threat_feed.append({**result, "ts": now})
-
-    return result
-
-@app.get("/threats/feed")
-@limiter.limit("60/minute")
-def threats_feed(request: Request):
-    return {"threats": threat_feed[-50:][::-1]}
-
-@app.get("/analytics")
-@limiter.limit("60/minute")
-def analytics(request: Request):
-    total   = len(threat_feed)
-    blocked = sum(1 for t in threat_feed if t.get("threat"))
+# ── Authentication Routes ────────────────────────────────────────
+@app.post("/auth/register")
+@limiter.limit("5/minute")
+async def register(
+    user_data: UserRegister,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    # Check if user exists
+    result = await db.execute(select(User).where(User.email == user_data.email))
+    if result.scalar_one_or_none():
+        raise HTTPException(400, "Email already registered")
+    
+    # Create user
+    user = User(
+        email=user_data.email,
+        hashed_password=hash_password(user_data.password),
+        full_name=user_data.full_name,
+        api_key=generate_api_key()
+    )
+    
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    
+    # Generate OTP for email verification
+    import secrets
+    otp_code = ''.join([str(secrets.randbelow(10)) for _ in range(6)])
+    otp_record = OTPCode(
+        user_id=user.id,
+        code=otp_code,
+        purpose="email_verification",
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10)
+    )
+    
+    db.add(otp_record)
+    await db.commit()
+    
+    # Send verification email
+    email_sent = await email_service.send_verification_code(
+        user.email, otp_code, user.full_name
+    )
+    
     return {
-        "total_scans":     total,
-        "threats_blocked": blocked,
-        "clean_requests":  total - blocked,
-        "threat_rate":     round(blocked / total, 4) if total else 0,
+        "message": "Registration successful. Check your email for verification code.",
+        "email": user.email,
+        "verification_code": otp_code if not email_sent else None  # Only show in dev if email failed
+    }
+
+@app.post("/auth/verify-email")
+@limiter.limit("10/minute")
+async def verify_email(
+    otp_data: OTPVerify,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    # Find user and OTP
+    user_result = await db.execute(select(User).where(User.email == otp_data.email))
+    user = user_result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(404, "User not found")
+    
+    otp_result = await db.execute(
+        select(OTPCode).where(
+            and_(
+                OTPCode.user_id == user.id,
+                OTPCode.code == otp_data.code,
+                OTPCode.purpose == "email_verification",
+                OTPCode.used == False,
+                OTPCode.expires_at > datetime.now(timezone.utc)
+            )
+        )
+    )
+    otp_record = otp_result.scalar_one_or_none()
+    
+    if not otp_record:
+        raise HTTPException(400, "Invalid or expired verification code")
+    
+    # Mark as verified
+    user.is_verified = True
+    otp_record.used = True
+    
+    await db.commit()
+    
+    return {"message": "Email verified successfully"}
+
+@app.post("/auth/login")
+@limiter.limit("10/minute")
+async def login(
+    login_data: UserLogin,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    # Find user
+    result = await db.execute(select(User).where(User.email == login_data.email))
+    user = result.scalar_one_or_none()
+    
+    if not user or not verify_password(login_data.password, user.hashed_password):
+        raise HTTPException(401, "Invalid email or password")
+    
+    if not user.is_verified:
+        raise HTTPException(403, "Email not verified")
+    
+    # Create tokens
+    access_token = create_access_token({"sub": user.id, "email": user.email})
+    refresh_token = create_refresh_token({"sub": user.id})
+    
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "subscription_tier": user.subscription_tier
+        }
+    }
+
+# ── Scanning Routes ──────────────────────────────────────────────
+@app.post("/scan/url")
+@limiter.limit("30/minute")
+async def scan_url(
+    scan_data: URLScanRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    url = str(scan_data.url)
+    
+    # Basic URL analysis
+    threat_score = 0.0
+    flags = []
+    categories = []
+    
+    # Check against threat intelligence
+    domain = scan_data.url.host
+    threat_result = await db.execute(
+        select(ThreatIntelligence).where(
+            and_(
+                ThreatIntelligence.indicator == domain,
+                ThreatIntelligence.indicator_type == "domain",
+                ThreatIntelligence.is_active == True
+            )
+        )
+    )
+    threat_intel = threat_result.scalar_one_or_none()
+    
+    if threat_intel:
+        threat_score = threat_intel.confidence
+        categories.append(threat_intel.threat_type)
+        flags.append(f"Known {threat_intel.threat_type} domain")
+    
+    # Heuristic analysis
+    suspicious_tlds = [".tk", ".ml", ".cf", ".ga"]
+    if any(url.endswith(tld) for tld in suspicious_tlds):
+        threat_score += 0.3
+        flags.append("Suspicious TLD")
+    
+    if len(domain.split(".")) > 3:  # too many subdomains
+        threat_score += 0.2
+        flags.append("Excessive subdomains")
+    
+    threat_score = min(threat_score, 1.0)
+    is_threat = threat_score > 0.3
+    
+    # Save scan result
+    scan = Scan(
+        user_id=current_user.id if current_user else None,
+        scan_type="url",
+        target=url,
+        is_threat=is_threat,
+        threat_score=threat_score,
+        threat_flags=flags,
+        threat_categories=categories,
+        ip_address=request.client.host
+    )
+    
+    db.add(scan)
+    await db.commit()
+    
+    return {
+        "url": url,
+        "is_threat": is_threat,
+        "threat_score": round(threat_score, 3),
+        "flags": flags,
+        "categories": categories,
+        "scan_id": scan.id
+    }
+
+@app.post("/scan/device")
+@limiter.limit("20/minute")
+async def scan_device(
+    scan_data: DeviceScanRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    user_agent = scan_data.user_agent or request.headers.get("user-agent", "")
+    ip_address = request.client.host
+    
+    # Get geolocation
+    geo_data = get_geolocation(ip_address)
+    
+    # Heuristic analysis
+    threat_score = 0.0
+    flags = []
+    
+    # Check for suspicious user agents
+    suspicious_agents = ["sqlmap", "nikto", "masscan", "nmap", "zgrab", "curl/", "python-requests"]
+    for agent in suspicious_agents:
+        if agent.lower() in user_agent.lower():
+            threat_score += 0.6
+            flags.append(f"Suspicious user-agent: {agent}")
+    
+    # Check IP reputation
+    private_ranges = ["10.", "192.168.", "172.16.", "127."]
+    if not any(ip_address.startswith(r) for r in private_ranges):
+        # Check threat intelligence for IP
+        threat_result = await db.execute(
+            select(ThreatIntelligence).where(
+                and_(
+                    ThreatIntelligence.indicator == ip_address,
+                    ThreatIntelligence.indicator_type == "ip",
+                    ThreatIntelligence.is_active == True
+                )
+            )
+        )
+        threat_intel = threat_result.scalar_one_or_none()
+        
+        if threat_intel:
+            threat_score += threat_intel.confidence * 0.5
+            flags.append(f"Known malicious IP ({threat_intel.threat_type})")
+    
+    threat_score = min(threat_score, 1.0)
+    is_threat = threat_score > 0.3
+    
+    # Save scan
+    scan = Scan(
+        user_id=current_user.id if current_user else None,
+        scan_type="device",
+        target=f"{ip_address}:{user_agent[:100]}",
+        is_threat=is_threat,
+        threat_score=threat_score,
+        threat_flags=flags,
+        user_agent=user_agent,
+        ip_address=ip_address,
+        **geo_data
+    )
+    
+    db.add(scan)
+    await db.commit()
+    
+    return {
+        "ip_address": ip_address,
+        "is_threat": is_threat,
+        "threat_score": round(threat_score, 3),
+        "flags": flags,
+        "geolocation": geo_data,
+        "scan_id": scan.id
+    }
+
+# ── Dashboard & Analytics ────────────────────────────────────────
+@app.get("/dashboard/stats")
+@limiter.limit("60/minute")
+async def get_dashboard_stats(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_user)
+):
+    # Get user's scan statistics
+    total_scans = await db.scalar(
+        select(func.count(Scan.id)).where(Scan.user_id == current_user.id)
+    )
+    
+    threats_found = await db.scalar(
+        select(func.count(Scan.id)).where(
+            and_(Scan.user_id == current_user.id, Scan.is_threat == True)
+        )
+    )
+    
+    # Get recent activity
+    recent_scans = await db.execute(
+        select(Scan)
+        .where(Scan.user_id == current_user.id)
+        .order_by(Scan.created_at.desc())
+        .limit(10)
+    )
+    
+    scans_list = []
+    for scan in recent_scans.scalars():
+        scans_list.append({
+            "id": scan.id,
+            "type": scan.scan_type,
+            "target": scan.target,
+            "is_threat": scan.is_threat,
+            "threat_score": scan.threat_score,
+            "created_at": scan.created_at.isoformat(),
+            "geolocation": {
+                "country": scan.country,
+                "city": scan.city
+            } if scan.country else None
+        })
+    
+    return {
+        "total_scans": total_scans or 0,
+        "threats_found": threats_found or 0,
+        "clean_scans": (total_scans or 0) - (threats_found or 0),
+        "threat_rate": round((threats_found or 0) / max(total_scans or 1, 1), 3),
+        "recent_scans": scans_list,
+        "model_status": "active" if model_loaded else "offline"
+    }
+
+@app.get("/dashboard/threats")
+@limiter.limit("60/minute")
+async def get_threat_dashboard(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_user)
+):
+    # Get threat map data
+    threat_scans = await db.execute(
+        select(Scan)
+        .where(
+            and_(
+                Scan.user_id == current_user.id,
+                Scan.is_threat == True,
+                Scan.latitude.is_not(None),
+                Scan.longitude.is_not(None)
+            )
+        )
+        .order_by(Scan.created_at.desc())
+        .limit(100)
+    )
+    
+    threat_map = []
+    for scan in threat_scans.scalars():
+        threat_map.append({
+            "lat": scan.latitude,
+            "lng": scan.longitude,
+            "country": scan.country,
+            "city": scan.city,
+            "threat_score": scan.threat_score,
+            "threat_type": scan.threat_categories[0] if scan.threat_categories else "unknown",
+            "timestamp": scan.created_at.isoformat()
+        })
+    
+    return {
+        "threat_map": threat_map,
+        "model_loaded": model_loaded
+    }
+
+# ── Health Check ─────────────────────────────────────────────────
+@app.get("/")
+@limiter.limit("60/minute")
+async def health_check(request: Request):
+    return {
+        "status": "ok",
+        "version": "2.0.0",
+        "model_loaded": model_loaded,
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }

@@ -41,10 +41,6 @@ export default function Landing() {
   const dark = theme === 'dark'
   const [isMobile] = useState(window.innerWidth < 768)
 
-  const heroImageUrl = dark 
-    ? "https://images.unsplash.com/photo-1518709268805-4e9042af2176?q=80&w=1200&h=600&fit=crop"
-    : "https://images.unsplash.com/photo-1563013544-824ae1b704d3?q=80&w=1200&h=600&fit=crop"
-
   return (
     <div className={`min-h-screen ${dark ? 'bg-surface-900 text-slate-200' : 'bg-light-bg text-light-text'}`}>
 
@@ -73,7 +69,7 @@ export default function Landing() {
             <Link to="/auth/login" className={`${dark ? 'text-slate-400 hover:text-slate-100' : 'text-light-muted hover:text-light-text'} transition-colors`}>
               Sign In
             </Link>
-            <Link to="/dashboard" className="btn-primary py-2 px-4 text-xs">
+            <Link to="/auth/register" className="btn-primary py-2 px-4 text-xs">
               Get Started
             </Link>
             <button onClick={toggle} className="p-1.5 rounded">
@@ -156,41 +152,57 @@ export default function Landing() {
               </div>
             </div>
 
-            {/* Hero Image */}
+            {/* Hero Visual - Abstract Dashboard Mockup */}
             <div className="relative">
-              <div className="aspect-video sm:aspect-square rounded-2xl overflow-hidden bg-gradient-to-br from-accent/20 to-accent/5 p-1">
-                <img 
-                  src={heroImageUrl}
-                  alt="Cybersecurity Dashboard"
-                  className="w-full h-full object-cover rounded-xl"
-                  loading="lazy"
-                />
+              <div className={`aspect-video sm:aspect-square rounded-2xl overflow-hidden p-6 relative
+                ${dark ? 'bg-gradient-to-br from-surface-700 to-surface-800 border border-surface-400' : 'bg-gradient-to-br from-blue-50 to-slate-100 border border-gray-200'}`}>
                 
-                {/* Floating cards overlay */}
-                <div className="absolute inset-0 p-4 pointer-events-none">
-                  
-                  {/* Threat Alert Card */}
-                  <div className={`absolute top-4 right-4 p-3 rounded-lg backdrop-blur-md border
-                    ${dark ? 'bg-surface-800/80 border-surface-400/50' : 'bg-white/80 border-white/50'}`}>
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="w-2 h-2 rounded-full bg-red-400 animate-pulse" />
-                      <span className={dark ? 'text-slate-200' : 'text-slate-700'}>
-                        Threat Detected
-                      </span>
+                {/* Abstract Dashboard Visual */}
+                <div className="relative z-10 space-y-4">
+                  {/* Top bar */}
+                  <div className="flex items-center justify-between">
+                    <div className={`h-8 w-24 rounded ${dark ? 'bg-surface-600' : 'bg-white/60'}`} />
+                    <div className="flex gap-2">
+                      <div className={`h-8 w-8 rounded ${dark ? 'bg-surface-600' : 'bg-white/60'}`} />
+                      <div className={`h-8 w-8 rounded ${dark ? 'bg-surface-600' : 'bg-white/60'}`} />
                     </div>
                   </div>
 
-                  {/* Stats Card */}
-                  <div className={`absolute bottom-4 left-4 p-3 rounded-lg backdrop-blur-md border
-                    ${dark ? 'bg-surface-800/80 border-surface-400/50' : 'bg-white/80 border-white/50'}`}>
-                    <div className="text-xs space-y-1">
-                      <div className={`font-mono font-bold ${dark ? 'text-accent' : 'text-accent'}`}>
-                        97.4% Accuracy
-                      </div>
-                      <div className={dark ? 'text-slate-400' : 'text-slate-600'}>
-                        Real-time detection
-                      </div>
+                  {/* Stats cards */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className={`p-3 rounded-lg ${dark ? 'bg-surface-600/50' : 'bg-white/50'}`}>
+                      <div className={`h-3 w-8 rounded mb-2 ${dark ? 'bg-accent/30' : 'bg-accent/20'}`} />
+                      <div className={`h-4 w-12 rounded ${dark ? 'bg-surface-500' : 'bg-gray-200'}`} />
                     </div>
+                    <div className={`p-3 rounded-lg ${dark ? 'bg-surface-600/50' : 'bg-white/50'}`}>
+                      <div className={`h-3 w-8 rounded mb-2 ${dark ? 'bg-green-400/30' : 'bg-green-400/20'}`} />
+                      <div className={`h-4 w-12 rounded ${dark ? 'bg-surface-500' : 'bg-gray-200'}`} />
+                    </div>
+                    <div className={`p-3 rounded-lg ${dark ? 'bg-surface-600/50' : 'bg-white/50'}`}>
+                      <div className={`h-3 w-8 rounded mb-2 ${dark ? 'bg-red-400/30' : 'bg-red-400/20'}`} />
+                      <div className={`h-4 w-12 rounded ${dark ? 'bg-surface-500' : 'bg-gray-200'}`} />
+                    </div>
+                  </div>
+
+                  {/* Chart area */}
+                  <div className={`p-4 rounded-lg ${dark ? 'bg-surface-600/30' : 'bg-white/40'}`}>
+                    <div className="flex items-end gap-1 h-24">
+                      {[40, 70, 50, 90, 60, 80, 55, 75].map((height, i) => (
+                        <div 
+                          key={i}
+                          className={`flex-1 rounded-t ${dark ? 'bg-accent/40' : 'bg-accent/30'}`}
+                          style={{ height: `${height}%` }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Live indicator */}
+                  <div className="flex items-center justify-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                    <span className={`text-xs font-mono ${dark ? 'text-slate-400' : 'text-slate-600'}`}>
+                      Live Monitoring
+                    </span>
                   </div>
                 </div>
               </div>

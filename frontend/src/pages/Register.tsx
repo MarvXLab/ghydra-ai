@@ -16,6 +16,8 @@ export default function Register() {
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -116,14 +118,34 @@ export default function Register() {
             <label className={`block text-sm font-medium mb-2 ${dark ? 'text-slate-300' : 'text-gray-700'}`}>
               Password
             </label>
-            <input
-              type="password"
-              required
-              value={formData.password}
-              onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
-              placeholder="Create a strong password"
-              className={inputClass}
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                required
+                value={formData.password}
+                onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
+                placeholder="Create a strong password"
+                className={inputClass}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className={`absolute right-3 top-1/2 transform -translate-y-1/2 
+                  ${dark ? 'text-slate-400 hover:text-slate-200' : 'text-gray-400 hover:text-gray-600'} transition-colors`}
+              >
+                {showPassword ? (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                    <path d="M13.73 4.51001C13.18 4.37001 12.61 4.30001 12 4.30001C7.52 4.30001 3.73 7.24001 2.46 11.2C3.06 13.08 4.18 14.71 5.66 15.93" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M3.5 20.5L20.5 3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                ) : (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                    <path d="M15 12C15 13.6569 13.6569 15 12 15C10.3431 15 9 13.6569 9 12C9 10.3431 10.3431 9 12 9C13.6569 9 15 10.3431 15 12Z" stroke="currentColor" strokeWidth="2"/>
+                    <path d="M12.0003 5C7.52443 5 3.73042 7.94288 2.45703 12C3.73171 16.0571 7.52589 19 12.0003 19C16.4747 19 20.2687 16.0571 21.5421 12C20.2674 7.94288 16.4734 5 12.0003 5Z" stroke="currentColor" strokeWidth="2"/>
+                  </svg>
+                )}
+              </button>
+            </div>
           </div>
 
           {/* Confirm Password */}
@@ -131,14 +153,34 @@ export default function Register() {
             <label className={`block text-sm font-medium mb-2 ${dark ? 'text-slate-300' : 'text-gray-700'}`}>
               Confirm Password
             </label>
-            <input
-              type="password"
-              required
-              value={formData.confirmPassword}
-              onChange={(e) => setFormData(prev => ({ ...prev, confirmPassword: e.target.value }))}
-              placeholder="Confirm your password"
-              className={inputClass}
-            />
+            <div className="relative">
+              <input
+                type={showConfirmPassword ? "text" : "password"}
+                required
+                value={formData.confirmPassword}
+                onChange={(e) => setFormData(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                placeholder="Confirm your password"
+                className={inputClass}
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                className={`absolute right-3 top-1/2 transform -translate-y-1/2 
+                  ${dark ? 'text-slate-400 hover:text-slate-200' : 'text-gray-400 hover:text-gray-600'} transition-colors`}
+              >
+                {showConfirmPassword ? (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                    <path d="M13.73 4.51001C13.18 4.37001 12.61 4.30001 12 4.30001C7.52 4.30001 3.73 7.24001 2.46 11.2C3.06 13.08 4.18 14.71 5.66 15.93" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M3.5 20.5L20.5 3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                ) : (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                    <path d="M15 12C15 13.6569 13.6569 15 12 15C10.3431 15 9 13.6569 9 12C9 10.3431 10.3431 9 12 9C13.6569 9 15 10.3431 15 12Z" stroke="currentColor" strokeWidth="2"/>
+                    <path d="M12.0003 5C7.52443 5 3.73042 7.94288 2.45703 12C3.73171 16.0571 7.52589 19 12.0003 19C16.4747 19 20.2687 16.0571 21.5421 12C20.2674 7.94288 16.4734 5 12.0003 5Z" stroke="currentColor" strokeWidth="2"/>
+                  </svg>
+                )}
+              </button>
+            </div>
           </div>
 
           {/* Error Message */}

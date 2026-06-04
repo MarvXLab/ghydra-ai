@@ -15,6 +15,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [rememberMe, setRememberMe] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -95,7 +96,7 @@ export default function Login() {
             </label>
             <div className="relative">
               <input
-                type="password"
+                type={showPassword ? "text" : "password"}
                 required
                 value={formData.password}
                 onChange={(e) => setFormData(prev => ({ ...prev, password: e.target.value }))}
@@ -104,13 +105,24 @@ export default function Login() {
               />
               <button
                 type="button"
+                onClick={() => setShowPassword(!showPassword)}
                 className={`absolute right-3 top-1/2 transform -translate-y-1/2 
-                  ${dark ? 'text-slate-400' : 'text-gray-400'}`}
+                  ${dark ? 'text-slate-400 hover:text-slate-200' : 'text-gray-400 hover:text-gray-600'} transition-colors`}
               >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                  <path d="M15 12C15 13.6569 13.6569 15 12 15C10.3431 15 9 13.6569 9 12C9 10.3431 10.3431 9 12 9C13.6569 9 15 10.3431 15 12Z" stroke="currentColor" strokeWidth="2"/>
-                  <path d="M12.0003 5C7.52443 5 3.73042 7.94288 2.45703 12C3.73171 16.0571 7.52589 19 12.0003 19C16.4747 19 20.2687 16.0571 21.5421 12C20.2674 7.94288 16.4734 5 12.0003 5Z" stroke="currentColor" strokeWidth="2"/>
-                </svg>
+                {showPassword ? (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                    <path d="M13.73 4.51001C13.18 4.37001 12.61 4.30001 12 4.30001C7.52 4.30001 3.73 7.24001 2.46 11.2C3.06 13.08 4.18 14.71 5.66 15.93" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M17.61 8.05001C18.71 9.21001 19.58 10.64 20.15 12.25C18.88 16.21 15.09 19.15 10.61 19.15C9.43 19.15 8.31 18.94 7.28 18.55" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M9.47 14.53C8.76 13.82 8.32 12.86 8.32 11.8C8.32 9.69001 10.02 7.99001 12.13 7.99001C13.19 7.99001 14.15 8.43001 14.86 9.14001" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M15.51 12.7C15.25 14.11 14.1 15.26 12.69 15.52" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M3.5 20.5L20.5 3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                ) : (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                    <path d="M15 12C15 13.6569 13.6569 15 12 15C10.3431 15 9 13.6569 9 12C9 10.3431 10.3431 9 12 9C13.6569 9 15 10.3431 15 12Z" stroke="currentColor" strokeWidth="2"/>
+                    <path d="M12.0003 5C7.52443 5 3.73042 7.94288 2.45703 12C3.73171 16.0571 7.52589 19 12.0003 19C16.4747 19 20.2687 16.0571 21.5421 12C20.2674 7.94288 16.4734 5 12.0003 5Z" stroke="currentColor" strokeWidth="2"/>
+                  </svg>
+                )}
               </button>
             </div>
           </div>

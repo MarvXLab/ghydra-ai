@@ -1,39 +1,38 @@
 import os
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 import sys
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
-# Add backend/ to path so 'models', 'auth', 'services' are importable
+# Ensure backend/ is on the path
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
 from models.database import Base
 
-# Database URL from environment
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable is required")
 
-DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
+# asyncpg driver
+if "postgresql://" in DATABASE_URL and "postgresql+asyncpg://" not in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
 
-# Create async engine
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=5,
+    max_overflow=10,
     pool_pre_ping=True,
     pool_recycle=3600,
 )
 
-# Create async session factory
 AsyncSessionLocal = async_sessionmaker(
-    engine, 
-    class_=AsyncSession, 
+    engine,
+    class_=AsyncSession,
     expire_on_commit=False
 )
 
-async def get_db() -> AsyncSession:
+async def get_db():
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -41,10 +40,8 @@ async def get_db() -> AsyncSession:
             await session.close()
 
 async def init_db():
-    """Create all tables"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
 async def close_db():
-    """Close database connection"""
     await engine.dispose()

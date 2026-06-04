@@ -38,12 +38,12 @@ export default function Dashboard() {
     const token = localStorage.getItem('access_token')
     const userData = localStorage.getItem('user')
     
-    if (!token || !userData) {
+    if (!token) {
       navigate('/auth/login')
       return
     }
 
-    setUser(JSON.parse(userData))
+    if (userData) setUser(JSON.parse(userData))
     api.defaults.headers.common['Authorization'] = `Bearer ${token}`
     
     fetchDashboardStats()

@@ -8,7 +8,9 @@ from fastapi import HTTPException, status
 from passlib.context import CryptContext
 
 # Security configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "ghydra-super-secret-key-change-in-production")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError("JWT_SECRET_KEY environment variable is required for production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 30

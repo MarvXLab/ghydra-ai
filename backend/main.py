@@ -122,7 +122,7 @@ def verify_token(token: str) -> dict:
         return jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Token expired")
-    except jwt.PyJWTError:
+    except jwt.exceptions.PyJWTError:
         raise HTTPException(401, "Invalid token")
 
 def generate_api_key() -> str:

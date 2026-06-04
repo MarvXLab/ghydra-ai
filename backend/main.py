@@ -396,6 +396,68 @@ async def google_callback(code: str, db: AsyncSession = Depends(get_db)):
     refresh_token = create_refresh_token({"sub": user.id})
     return RedirectResponse(f"{FRONTEND_URL}/auth/callback?access_token={access_token}&refresh_token={refresh_token}")
 
+# ── Model training endpoints ─────────────────────────────────────
+import threading
+
+_training_state: dict = {"status": "idle", "log": [], "progress": 0}
+
+def _run_training():
+    global ml_model, ml_scaler, ml_encoders, model_loaded, _training_state
+    _training_state = {"status": "training", "log": ["[ghydra] Starting AI engine training..."], "progress": 0}
+    try:
+        import sys
+        sys.path.insert(0, str(PROJECT_DIR))
+        from src.preprocess import load_data, preprocess
+        from sklearn.neural_network import MLPClassifier
+        from sklearn.model_selection import train_test_split
+
+        data_dir = PROJECT_DIR / "data"
+        train_path = data_dir / "KDDTrain+.txt"
+        test_path  = data_dir / "KDDTest+.txt"
+
+        if not train_path.exists():
+            _training_state["log"].append("[error] Training data not found")
+            _training_state["status"] = "error"
+            return
+
+        _training_state["log"].append("[ghydra] Loading NSL-KDD dataset..."); _training_state["progress"] = 10
+        train_df, test_df = load_data(str(train_path), str(test_path))
+
+        _training_state["log"].append("[ghydra] Preprocessing features..."); _training_state["progress"] = 30
+        MODELS_DIR.mkdir(exist_ok=True)
+        X_train, y_train, _, _ = preprocess(train_df, test_df, str(MODELS_DIR))
+
+        _training_state["log"].append("[ghydra] Training MLP 256→128→64..."); _training_state["progress"] = 50
+        model = MLPClassifier(hidden_layer_sizes=(256, 128, 64), activation="relu", solver="adam",
+                              max_iter=100, early_stopping=True, random_state=42, verbose=False)
+        X_tr, _, y_tr, _ = train_test_split(X_train, y_train, test_size=0.1, random_state=42, stratify=y_train)
+        model.fit(X_tr, y_tr)
+
+        _training_state["log"].append("[ghydra] Saving model..."); _training_state["progress"] = 90
+        with open(MODELS_DIR / "threat_model_sklearn.pkl", "wb") as f: pickle.dump(model, f)
+        load_ml_model()
+        _training_state["log"].append("[ghydra] ✓ AI engine online.")
+        _training_state["progress"] = 100
+        _training_state["status"] = "done"
+    except Exception as e:
+        _training_state["log"].append(f"[error] {e}")
+        _training_state["status"] = "error"
+
+@app.get("/model/status")
+async def model_status():
+    return {"loaded": model_loaded, "training": _training_state}
+
+@app.get("/model/log")
+async def model_log():
+    return _training_state
+
+@app.post("/model/train")
+async def model_train(current_user: User = Depends(require_user)):
+    if model_loaded: raise HTTPException(400, detail="Model already trained")
+    if _training_state["status"] == "training": raise HTTPException(400, detail="Training already in progress")
+    threading.Thread(target=_run_training, daemon=True).start()
+    return {"message": "Training started"}
+
 # ── GitHub OAuth ──────────────────────────────────────────────────
 @app.get("/auth/github")
 async def github_login():

@@ -195,8 +195,15 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://ghydra-ai.pages.dev,http://localhost:5173").split(",")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://ghydra-ai.pages.dev")
+GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+GITHUB_CLIENT_ID     = os.environ.get("GITHUB_CLIENT_ID", "")
+GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
+BACKEND_URL = os.environ.get("BACKEND_URL", "https://ghydra-ai.onrender.com")
+
 app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS,
-                   allow_methods=["GET","POST","PUT","DELETE"],
+                   allow_methods=["GET","POST","PUT","DELETE","OPTIONS"],
                    allow_headers=["Content-Type","Authorization"], allow_credentials=True)
 
 http_security = HTTPBearer(auto_error=False)
@@ -352,3 +359,82 @@ async def dashboard_stats(request: Request, db: AsyncSession = Depends(get_db),
 async def threat_dashboard(request: Request, db: AsyncSession = Depends(get_db),
                             current_user: User = Depends(require_user)):
     return {"threat_map": [], "model_loaded": model_loaded}
+
+# ── Google OAuth ──────────────────────────────────────────────────
+@app.get("/auth/google")
+async def google_login():
+    from fastapi.responses import RedirectResponse
+    params = f"client_id={GOOGLE_CLIENT_ID}&redirect_uri={BACKEND_URL}/auth/google/callback&response_type=code&scope=openid%20email%20profile"
+    return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{params}")
+
+@app.get("/auth/google/callback")
+async def google_callback(code: str, db: AsyncSession = Depends(get_db)):
+    from fastapi.responses import RedirectResponse
+    async with httpx.AsyncClient() as client:
+        token_r = await client.post("https://oauth2.googleapis.com/token", data={
+            "code": code, "client_id": GOOGLE_CLIENT_ID, "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": f"{BACKEND_URL}/auth/google/callback", "grant_type": "authorization_code"
+        })
+        token_data = token_r.json()
+        if "access_token" not in token_data:
+            raise HTTPException(400, "Google auth failed")
+        user_r = await client.get("https://www.googleapis.com/oauth2/v2/userinfo",
+                                   headers={"Authorization": f"Bearer {token_data['access_token']}"})
+        guser = user_r.json()
+    r = await db.execute(select(User).where(User.google_id == guser["id"]))
+    user = r.scalar_one_or_none()
+    if not user:
+        er = await db.execute(select(User).where(User.email == guser["email"]))
+        user = er.scalar_one_or_none()
+        if user:
+            user.google_id = guser["id"]; user.avatar_url = guser.get("picture")
+        else:
+            user = User(email=guser["email"], full_name=guser.get("name", ""),
+                        google_id=guser["id"], avatar_url=guser.get("picture"),
+                        is_verified=True, api_key=generate_api_key())
+            db.add(user)
+        await db.commit(); await db.refresh(user)
+    access_token = create_access_token({"sub": user.id, "email": user.email})
+    refresh_token = create_refresh_token({"sub": user.id})
+    return RedirectResponse(f"{FRONTEND_URL}/auth/callback?access_token={access_token}&refresh_token={refresh_token}")
+
+# ── GitHub OAuth ──────────────────────────────────────────────────
+@app.get("/auth/github")
+async def github_login():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(f"https://github.com/login/oauth/authorize?client_id={GITHUB_CLIENT_ID}&redirect_uri={BACKEND_URL}/auth/github/callback&scope=user:email")
+
+@app.get("/auth/github/callback")
+async def github_callback(code: str, db: AsyncSession = Depends(get_db)):
+    from fastapi.responses import RedirectResponse
+    async with httpx.AsyncClient() as client:
+        token_r = await client.post("https://github.com/login/oauth/access_token",
+                                     headers={"Accept": "application/json"},
+                                     data={"client_id": GITHUB_CLIENT_ID, "client_secret": GITHUB_CLIENT_SECRET, "code": code})
+        token_data = token_r.json()
+        if "access_token" not in token_data:
+            raise HTTPException(400, "GitHub auth failed")
+        gh_token = token_data["access_token"]
+        user_r  = await client.get("https://api.github.com/user",
+                                    headers={"Authorization": f"Bearer {gh_token}"})
+        email_r = await client.get("https://api.github.com/user/emails",
+                                    headers={"Authorization": f"Bearer {gh_token}"})
+        guser = user_r.json()
+        emails = email_r.json()
+    primary_email = next((e["email"] for e in emails if e.get("primary")), guser.get("email", ""))
+    r = await db.execute(select(User).where(User.github_id == str(guser["id"])))
+    user = r.scalar_one_or_none()
+    if not user:
+        er = await db.execute(select(User).where(User.email == primary_email))
+        user = er.scalar_one_or_none()
+        if user:
+            user.github_id = str(guser["id"]); user.avatar_url = guser.get("avatar_url")
+        else:
+            user = User(email=primary_email, full_name=guser.get("name") or guser.get("login", ""),
+                        github_id=str(guser["id"]), avatar_url=guser.get("avatar_url"),
+                        is_verified=True, api_key=generate_api_key())
+            db.add(user)
+        await db.commit(); await db.refresh(user)
+    access_token = create_access_token({"sub": user.id, "email": user.email})
+    refresh_token = create_refresh_token({"sub": user.id})
+    return RedirectResponse(f"{FRONTEND_URL}/auth/callback?access_token={access_token}&refresh_token={refresh_token}")

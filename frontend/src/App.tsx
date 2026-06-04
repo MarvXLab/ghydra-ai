@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { ThemeProvider } from './lib/theme'
 
 // Pages
+import OAuthCallback from './pages/OAuthCallback'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Register from './pages/Register'
@@ -29,6 +30,7 @@ export default function App() {
           <Route path="/auth/login" element={<Login />} />
           <Route path="/auth/register" element={<Register />} />
           <Route path="/auth/verify-email" element={<VerifyEmail />} />
+          <Route path="/auth/callback" element={<OAuthCallback />} />
           <Route path="/pricing" element={<Pricing />} />
 
           {/* Protected Routes */}

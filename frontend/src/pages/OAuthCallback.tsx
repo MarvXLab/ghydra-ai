@@ -9,11 +9,11 @@ export default function OAuthCallback() {
   useEffect(() => {
     const access_token = params.get('access_token')
     const refresh_token = params.get('refresh_token')
-    if (!access_token) { navigate('/auth/login'); return }
+    if (!access_token) { window.location.href = '/auth/login'; return }
     localStorage.setItem('access_token', access_token)
     if (refresh_token) localStorage.setItem('refresh_token', refresh_token)
     api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
-    navigate('/dashboard')
+    window.location.href = '/dashboard'
   }, [])
 
   return (

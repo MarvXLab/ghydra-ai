@@ -21,7 +21,7 @@ from pydantic import BaseModel, EmailStr, field_validator, HttpUrl
 from sqlalchemy import Column, String, Boolean, DateTime, Float, Integer, Text, JSON, ForeignKey, func, and_, select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, relationship
-from passlib.context import CryptContext
+import bcrypt
 import jwt
 
 # ── Database models (inlined) ─────────────────────────────────────
@@ -104,10 +104,8 @@ SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 if not SECRET_KEY:
     raise ValueError("JWT_SECRET_KEY environment variable is required")
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-def hash_password(p: str) -> str:           return pwd_context.hash(p)
-def verify_password(p: str, h: str) -> bool: return pwd_context.verify(p, h)
+def hash_password(p: str) -> str:           return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
+def verify_password(p: str, h: str) -> bool: return bcrypt.checkpw(p.encode(), h.encode())
 
 def create_access_token(data: dict) -> str:
     payload = {**data, "exp": datetime.now(timezone.utc) + timedelta(minutes=30), "type": "access"}

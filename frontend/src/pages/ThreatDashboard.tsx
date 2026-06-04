@@ -1,398 +1,290 @@
-import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
 import AppLayout from '../components/AppLayout'
 import { useTheme } from '../lib/theme'
 import api from '../lib/api'
 
-interface ThreatMapPoint {
-  lat: number
-  lng: number
-  country: string
-  city: string
-  threat_score: number
-  threat_type: string
-  timestamp: string
-}
-
-interface ThreatData {
-  threat_map: ThreatMapPoint[]
-  model_loaded: boolean
-}
-
-interface SecurityEvent {
+interface Scan {
   id: string
   type: string
-  severity: 'low' | 'medium' | 'high' | 'critical'
-  source_ip: string
-  country: string
-  description: string
-  timestamp: string
-  status: 'open' | 'resolved'
+  target: string
+  is_threat: boolean
+  threat_score: number
+  created_at: string
 }
 
-// Sample world map component (simplified SVG)
-const WorldMap = ({ threats, dark }: { threats: ThreatMapPoint[]; dark: boolean }) => {
-  return (
-    <div className={`relative w-full h-64 rounded-xl overflow-hidden
-      ${dark ? 'bg-surface-900' : 'bg-slate-100'}`}>
-      
-      {/* Simplified world map background */}
-      <svg
-        viewBox="0 0 800 400"
-        className="w-full h-full opacity-20"
-        fill={dark ? '#334155' : '#64748b'}
-      >
-        {/* Simplified continent shapes */}
-        <path d="M100 150 L200 120 L280 140 L350 130 L400 150 L380 200 L300 220 L200 200 L120 180 Z" />
-        <path d="M450 100 L550 90 L620 110 L650 130 L630 180 L580 200 L500 190 L470 160 Z" />
-        <path d="M200 250 L300 240 L380 260 L350 320 L280 340 L220 320 Z" />
-        <path d="M500 200 L600 190 L680 210 L670 280 L600 300 L520 290 Z" />
-      </svg>
-
-      {/* Threat points */}
-      {threats.map((threat, index) => (
-        <div
-          key={index}
-          className="absolute transform -translate-x-1/2 -translate-y-1/2 animate-pulse"
-          style={{
-            left: `${(threat.lng + 180) * (100/360)}%`,
-            top: `${(90 - threat.lat) * (100/180)}%`
-          }}
-        >
-          <div className={`w-3 h-3 rounded-full border-2 border-white shadow-lg
-            ${threat.threat_score > 0.7 ? 'bg-red-500' : 
-              threat.threat_score > 0.4 ? 'bg-orange-500' : 'bg-yellow-500'}`}
-          />
-        </div>
-      ))}
-
-      {/* Legend */}
-      <div className="absolute top-4 right-4 space-y-2">
-        <div className="flex items-center gap-2 text-xs">
-          <div className="w-2 h-2 rounded-full bg-red-500" />
-          <span className={dark ? 'text-slate-300' : 'text-slate-700'}>Critical</span>
-        </div>
-        <div className="flex items-center gap-2 text-xs">
-          <div className="w-2 h-2 rounded-full bg-orange-500" />
-          <span className={dark ? 'text-slate-300' : 'text-slate-700'}>High</span>
-        </div>
-        <div className="flex items-center gap-2 text-xs">
-          <div className="w-2 h-2 rounded-full bg-yellow-500" />
-          <span className={dark ? 'text-slate-300' : 'text-slate-700'}>Medium</span>
-        </div>
-      </div>
-    </div>
-  )
+interface Stats {
+  total_scans: number
+  threats_found: number
+  clean_scans: number
+  threat_rate: number
+  recent_scans: Scan[]
+  model_status: string
 }
 
-export default function Threats() {
+type TrainingStatus = 'idle' | 'training' | 'done' | 'error'
+
+export default function ThreatDashboard() {
   const { theme } = useTheme()
-  const navigate = useNavigate()
   const dark = theme === 'dark'
-  
-  const [threatData, setThreatData] = useState<ThreatData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
 
-  // Sample security events (in real app, fetch from API)
-  const [securityEvents] = useState<SecurityEvent[]>([
-    {
-      id: '1',
-      type: 'SQL Injection',
-      severity: 'critical',
-      source_ip: '203.0.113.5',
-      country: 'Unknown',
-      description: 'SQL injection detected in login page',
-      timestamp: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-      status: 'open'
-    },
-    {
-      id: '2', 
-      type: 'Malware detected',
-      severity: 'high',
-      source_ip: '192.168.1.100',
-      country: 'US',
-      description: 'Suspicious activity detected',
-      timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
-      status: 'open'
-    },
-    {
-      id: '3',
-      type: 'DDoS attack',
-      severity: 'medium',
-      source_ip: '10.0.0.1',
-      country: 'CN',
-      description: 'Multiple requests from same IP',
-      timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
-      status: 'resolved'
-    },
-    {
-      id: '4',
-      type: 'Suspicious activity detected',
-      severity: 'medium',
-      source_ip: '172.16.0.1',
-      country: 'RU',
-      description: 'Unusual login attempt pattern',
-      timestamp: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
-      status: 'open'
-    }
-  ])
+  const [stats, setStats] = useState<Stats | null>(null)
+  const [modelLoaded, setModelLoaded] = useState(false)
+  const [trainingStatus, setTrainingStatus] = useState<TrainingStatus>('idle')
+  const [log, setLog] = useState<string[]>([])
+  const [progress, setProgress] = useState(0)
+  const [activating, setActivating] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const logEndRef = useRef<HTMLDivElement>(null)
+
+  const card = dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-gray-200'
+  const text = dark ? 'text-slate-100' : 'text-gray-900'
+  const muted = dark ? 'text-slate-400' : 'text-gray-500'
 
   useEffect(() => {
     const token = localStorage.getItem('access_token')
-    if (!token) {
-      navigate('/auth/login')
-      return
-    }
-    api.defaults.headers.common['Authorization'] = `Bearer ${token}`
-    
-    fetchThreatData()
-  }, [navigate])
+    if (token) api.defaults.headers.common['Authorization'] = `Bearer ${token}`
+    checkModelStatus()
+    fetchStats()
+    const interval = setInterval(fetchStats, 10000)
+    return () => { clearInterval(interval); if (pollRef.current) clearInterval(pollRef.current) }
+  }, [])
 
-  const fetchThreatData = async () => {
+  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [log])
+
+  async function checkModelStatus() {
     try {
-      const response = await api.get('/dashboard/threats')
-      setThreatData(response.data)
-    } catch (error) {
-      console.error('Failed to fetch threat data:', error)
-      // Mock data for demo
-      setThreatData({
-        threat_map: [
-          { lat: 40.7128, lng: -74.0060, country: 'US', city: 'New York', threat_score: 0.8, threat_type: 'malware', timestamp: new Date().toISOString() },
-          { lat: 51.5074, lng: -0.1278, country: 'UK', city: 'London', threat_score: 0.6, threat_type: 'phishing', timestamp: new Date().toISOString() },
-          { lat: 35.6762, lng: 139.6503, country: 'JP', city: 'Tokyo', threat_score: 0.4, threat_type: 'suspicious', timestamp: new Date().toISOString() },
-          { lat: -33.8688, lng: 151.2093, country: 'AU', city: 'Sydney', threat_score: 0.7, threat_type: 'botnet', timestamp: new Date().toISOString() },
-        ],
-        model_loaded: true
-      })
-    }
+      const res = await api.get('/')
+      setModelLoaded(res.data.model_loaded)
+      if (res.data.model_loaded) setTrainingStatus('done')
+    } catch { /* ignore */ }
     setLoading(false)
   }
 
-  const refreshData = async () => {
-    setRefreshing(true)
-    await fetchThreatData()
-    setRefreshing(false)
+  async function fetchStats() {
+    try {
+      const res = await api.get('/dashboard/stats')
+      setStats(res.data)
+      setModelLoaded(res.data.model_status === 'active')
+    } catch { /* ignore */ }
   }
 
-  const formatTimeAgo = (timestamp: string) => {
-    const now = Date.now()
-    const time = new Date(timestamp).getTime()
-    const diff = now - time
-    
-    const minutes = Math.floor(diff / (1000 * 60))
-    const hours = Math.floor(diff / (1000 * 60 * 60))
-    
-    if (minutes < 60) return `${minutes} min ago`
-    return `${hours} hr ago`
+  function startPollingLog() {
+    if (pollRef.current) return
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await api.get('/model/log')
+        setLog(res.data.log ?? [])
+        setProgress(res.data.progress ?? 0)
+        const s: TrainingStatus = res.data.status
+        setTrainingStatus(s)
+        if (s === 'done' || s === 'error') {
+          if (s === 'done') setModelLoaded(true)
+          setActivating(false)
+          clearInterval(pollRef.current!); pollRef.current = null
+        }
+      } catch { /* ignore */ }
+    }, 1500)
   }
 
-  const getSeverityColor = (severity: string) => {
-    switch (severity) {
-      case 'critical': return 'text-red-500 bg-red-50 border-red-200'
-      case 'high': return 'text-orange-500 bg-orange-50 border-orange-200'
-      case 'medium': return 'text-yellow-600 bg-yellow-50 border-yellow-200'
-      case 'low': return 'text-green-600 bg-green-50 border-green-200'
-      default: return 'text-gray-500 bg-gray-50 border-gray-200'
+  async function handleActivate() {
+    setActivating(true)
+    setLog(['[ghydra] Initializing AI threat engine...'])
+    try {
+      await api.post('/model/train')
+      setTrainingStatus('training')
+      startPollingLog()
+    } catch (err: any) {
+      if (err.response?.data?.message === 'Model already trained') {
+        setModelLoaded(true); setTrainingStatus('done')
+      }
+      setActivating(false)
     }
   }
 
-  if (loading) {
-    return (
-      <AppLayout>
-        <div className={`min-h-screen flex items-center justify-center ${dark ? 'bg-surface-900' : 'bg-light-bg'}`}>
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent"></div>
-        </div>
-      </AppLayout>
-    )
-  }
+  const sevColor = (score: number) =>
+    score >= 0.7 ? 'text-red-500' : score >= 0.4 ? 'text-orange-500' : 'text-yellow-500'
+  const sevBadge = (score: number) =>
+    score >= 0.7 ? 'bg-red-100 text-red-700 border-red-200' :
+    score >= 0.4 ? 'bg-orange-100 text-orange-700 border-orange-200' :
+                   'bg-yellow-100 text-yellow-700 border-yellow-200'
+  const sevLabel = (score: number) => score >= 0.7 ? 'Critical' : score >= 0.4 ? 'High' : 'Medium'
+
+  const threats = stats?.recent_scans?.filter(s => s.is_threat) ?? []
+  const showTerminal = trainingStatus === 'training' || activating
+
+  if (loading) return (
+    <AppLayout>
+      <div className={`min-h-screen flex items-center justify-center ${dark ? 'bg-surface-900' : 'bg-gray-50'}`}>
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-accent" />
+      </div>
+    </AppLayout>
+  )
 
   return (
     <AppLayout>
-      <div className={`min-h-screen ${dark ? 'bg-surface-900' : 'bg-light-bg'} p-4 sm:p-6`}>
-        
+      <div className={`min-h-screen ${dark ? 'bg-surface-900' : 'bg-gray-50'} p-4 sm:p-6`}>
+
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className={`text-xl sm:text-2xl font-bold ${dark ? 'text-slate-100' : 'text-gray-900'}`}>
-              Threat Detection
-            </h1>
-            <p className={`text-sm ${dark ? 'text-slate-400' : 'text-gray-600'}`}>
-              Real-time security monitoring
+            <h1 className={`text-xl font-bold ${text}`}>Threat Detection</h1>
+            <p className={`text-xs mt-0.5 ${muted}`}>Real-time AI threat analysis</p>
+          </div>
+          <div className={`flex items-center gap-2 text-xs font-mono px-3 py-1.5 rounded-lg border
+            ${modelLoaded ? 'border-green-500/30 text-green-500 bg-green-500/5' : 'border-red-500/30 text-red-400 bg-red-500/5'}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${modelLoaded ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
+            {modelLoaded ? 'AI Active' : 'Engine Offline'}
+          </div>
+        </div>
+
+        {/* AI Activation Gate */}
+        {!modelLoaded && !showTerminal && (
+          <div className={`${card} rounded-2xl p-8 text-center mb-6`}>
+            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4 ${dark ? 'bg-surface-600' : 'bg-gray-100'}`}>
+              <svg className="w-7 h-7 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+              </svg>
+            </div>
+            <h2 className={`text-base font-bold mb-2 ${text}`}>AI Engine Not Activated</h2>
+            <p className={`text-sm mb-5 max-w-sm mx-auto ${muted}`}>
+              Train the threat detection model once to bring the AI engine online. Takes 3–8 minutes. Persists permanently after training.
             </p>
-          </div>
-          
-          <button
-            onClick={refreshData}
-            disabled={refreshing}
-            className={`p-2 rounded-xl border transition-colors ${refreshing ? 'animate-spin' : ''}
-              ${dark 
-                ? 'border-surface-400 text-slate-400 hover:bg-surface-700' 
-                : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-              }`}
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-          </button>
-        </div>
-
-        {/* Stats Row */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-          
-          {/* Intrusion Attempts */}
-          <div className={`p-4 rounded-xl ${dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-gray-200'}`}>
-            <div className="flex items-center justify-between mb-2">
-              <span className={`text-xs uppercase tracking-wider ${dark ? 'text-slate-500' : 'text-gray-500'}`}>
-                Intrusion Attempts
-              </span>
-              <span className="text-xs px-1.5 py-0.5 bg-red-100 text-red-600 rounded">-3%</span>
+            <div className={`text-xs font-mono rounded-lg px-4 py-3 mb-5 text-left max-w-xs mx-auto space-y-1
+              ${dark ? 'bg-surface-900 border border-surface-400 text-slate-400' : 'bg-gray-50 border border-gray-200 text-gray-500'}`}>
+              <div>Model: MLP 256→128→64</div>
+              <div>Dataset: NSL-KDD · 125,973 records</div>
+              <div>Est. time: 3–8 minutes</div>
             </div>
-            <p className={`text-2xl font-bold ${dark ? 'text-slate-100' : 'text-gray-900'}`}>6</p>
+            <button onClick={handleActivate} disabled={activating}
+              className="bg-accent hover:bg-accent-dim disabled:opacity-50 text-white font-medium px-8 py-2.5 rounded-xl transition-colors">
+              {activating ? 'Starting...' : 'Activate AI Engine'}
+            </button>
           </div>
+        )}
 
-          {/* Anomaly Alerts */}
-          <div className={`p-4 rounded-xl ${dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-gray-200'}`}>
-            <div className="flex items-center justify-between mb-2">
-              <span className={`text-xs uppercase tracking-wider ${dark ? 'text-slate-500' : 'text-gray-500'}`}>
-                Anomaly Alerts
-              </span>
-              <span className="text-xs px-1.5 py-0.5 bg-red-100 text-red-600 rounded">+5%</span>
+        {/* Training Terminal */}
+        {showTerminal && (
+          <div className={`${card} rounded-2xl overflow-hidden mb-6`}>
+            <div className={`flex items-center gap-2 px-4 py-3 border-b ${dark ? 'border-surface-400 bg-surface-900' : 'border-gray-200 bg-gray-50'}`}>
+              <div className="w-3 h-3 rounded-full bg-red-400" />
+              <div className="w-3 h-3 rounded-full bg-yellow-400" />
+              <div className="w-3 h-3 rounded-full bg-green-400" />
+              <span className={`ml-2 text-xs font-mono ${muted}`}>ghydra-ai-engine — training</span>
+              <span className="ml-auto text-xs font-mono text-accent">{progress}%</span>
             </div>
-            <p className={`text-2xl font-bold ${dark ? 'text-slate-100' : 'text-gray-900'}`}>22</p>
-          </div>
-
-          {/* Network Traffic */}
-          <div className={`p-4 rounded-xl ${dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-gray-200'}`}>
-            <div className="flex items-center justify-between mb-2">
-              <span className={`text-xs uppercase tracking-wider ${dark ? 'text-slate-500' : 'text-gray-500'}`}>
-                Network Traffic
-              </span>
-              <span className="text-xs px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded">Warning</span>
+            <div className="h-48 overflow-y-auto p-4 font-mono text-xs text-green-400 bg-black/90 space-y-0.5">
+              {log.map((line, i) => <div key={i}>{line}</div>)}
+              {trainingStatus === 'training' && (
+                <div className="animate-pulse">█</div>
+              )}
+              <div ref={logEndRef} />
             </div>
-            <p className={`text-2xl font-bold ${dark ? 'text-slate-100' : 'text-gray-900'}`}>12.5k</p>
-          </div>
-
-          {/* Threat Detection */}
-          <div className={`p-4 rounded-xl ${dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-gray-200'}`}>
-            <div className="flex items-center justify-between mb-2">
-              <span className={`text-xs uppercase tracking-wider ${dark ? 'text-slate-500' : 'text-gray-500'}`}>
-                AI Engine
-              </span>
-              <button className="text-xs text-accent hover:underline">Refresh</button>
-            </div>
-            <p className={`text-sm font-medium ${threatData?.model_loaded ? 'text-green-500' : 'text-red-500'}`}>
-              {threatData?.model_loaded ? 'Active' : 'Offline'}
-            </p>
-          </div>
-        </div>
-
-        {/* World Map */}
-        <div className={`mb-6 p-6 rounded-2xl ${dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-gray-200'}`}>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className={`font-semibold ${dark ? 'text-slate-100' : 'text-gray-900'}`}>
-              Global Threat Map
-            </h2>
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-              <span className={`text-xs ${dark ? 'text-slate-400' : 'text-gray-500'}`}>
-                Live
-              </span>
+            {/* Progress bar */}
+            <div className={`h-1 ${dark ? 'bg-surface-600' : 'bg-gray-200'}`}>
+              <div className="h-1 bg-accent transition-all duration-500" style={{ width: `${progress}%` }} />
             </div>
           </div>
-          
-          <WorldMap threats={threatData?.threat_map || []} dark={dark} />
-        </div>
+        )}
 
-        {/* Security Events & Top Threat Sources */}
-        <div className="grid md:grid-cols-2 gap-6">
-          
-          {/* Security Events */}
-          <div className={`rounded-2xl overflow-hidden ${dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-gray-200'}`}>
-            <div className="p-4 sm:p-6 border-b border-current border-opacity-10">
-              <div className="flex items-center justify-between">
-                <h3 className={`font-semibold ${dark ? 'text-slate-100' : 'text-gray-900'}`}>
-                  Security Events
-                </h3>
-                <button className="text-accent text-sm">View all</button>
+        {/* Stats — only when model active */}
+        {modelLoaded && (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+              {[
+                { label: 'Total Scans', value: stats?.total_scans ?? 0, color: 'text-blue-500' },
+                { label: 'Threats Found', value: stats?.threats_found ?? 0, color: 'text-red-500' },
+                { label: 'Clean Scans', value: stats?.clean_scans ?? 0, color: 'text-green-500' },
+                { label: 'Threat Rate', value: `${((stats?.threat_rate ?? 0) * 100).toFixed(1)}%`, color: 'text-orange-500' },
+              ].map(s => (
+                <div key={s.label} className={`${card} rounded-xl p-4`}>
+                  <p className={`text-2xl font-bold font-mono ${s.color}`}>{s.value}</p>
+                  <p className={`text-xs mt-1 ${muted}`}>{s.label}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Real Map — OpenStreetMap via iframe */}
+            <div className={`${card} rounded-2xl overflow-hidden mb-6`}>
+              <div className={`flex items-center justify-between px-5 py-3 border-b ${dark ? 'border-surface-400' : 'border-gray-200'}`}>
+                <h2 className={`font-semibold text-sm ${text}`}>Global Threat Map</h2>
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                  <span className={`text-xs ${muted}`}>Live</span>
+                </div>
+              </div>
+              <div className="relative">
+                <iframe
+                  src="https://www.openstreetmap.org/export/embed.html?bbox=-180,-90,180,90&layer=mapnik"
+                  className="w-full h-64 border-0"
+                  title="Threat Map"
+                  style={{ filter: dark ? 'invert(0.9) hue-rotate(180deg) brightness(0.85)' : 'none' }}
+                />
+                {/* Overlay threat dots from real scan data */}
+                <div className="absolute inset-0 pointer-events-none">
+                  {threats.slice(0, 8).map((t, i) => (
+                    <div key={i} className="absolute animate-pulse"
+                      style={{ left: `${20 + (i * 10) % 70}%`, top: `${20 + (i * 13) % 60}%` }}>
+                      <div className={`w-3 h-3 rounded-full border-2 border-white shadow-lg
+                        ${t.threat_score >= 0.7 ? 'bg-red-500' : t.threat_score >= 0.4 ? 'bg-orange-500' : 'bg-yellow-500'}`} />
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
-            
-            <div className="divide-y divide-current divide-opacity-10 max-h-96 overflow-y-auto">
-              {securityEvents.map((event) => (
-                <div key={event.id} className="p-4 sm:p-6">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className={`text-xs px-2 py-0.5 rounded border font-medium ${getSeverityColor(event.severity)}`}>
-                          {event.severity.toUpperCase()}
-                        </span>
-                        <span className={`w-2 h-2 rounded-full ${event.status === 'open' ? 'bg-red-400' : 'bg-green-400'}`} />
+
+            {/* Threat feed + top sources */}
+            <div className="grid sm:grid-cols-2 gap-4">
+              {/* Live threat feed */}
+              <div className={`${card} rounded-2xl overflow-hidden`}>
+                <div className={`px-5 py-3 border-b ${dark ? 'border-surface-400' : 'border-gray-200'} flex items-center justify-between`}>
+                  <h3 className={`font-semibold text-sm ${text}`}>Live Threat Feed</h3>
+                  <span className={`text-xs ${muted}`}>10s refresh</span>
+                </div>
+                <div className="divide-y divide-current divide-opacity-10 max-h-80 overflow-y-auto">
+                  {threats.length === 0 ? (
+                    <p className={`text-sm text-center py-8 ${muted}`}>No threats detected. Network is clean.</p>
+                  ) : threats.map(t => (
+                    <div key={t.id} className="px-5 py-3 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className={`text-sm font-mono truncate ${text}`}>{t.target}</p>
+                        <p className={`text-xs ${muted}`}>{t.type} · {new Date(t.created_at).toLocaleTimeString()}</p>
                       </div>
-                      <h4 className={`font-medium text-sm mb-1 ${dark ? 'text-slate-100' : 'text-gray-900'}`}>
-                        {event.type}
-                      </h4>
-                      <p className={`text-xs mb-2 ${dark ? 'text-slate-400' : 'text-gray-600'}`}>
-                        {event.description}
-                      </p>
-                      <div className="flex items-center gap-3 text-xs">
-                        <span className={`font-mono ${dark ? 'text-slate-500' : 'text-gray-500'}`}>
-                          {event.source_ip}
-                        </span>
-                        <span className={dark ? 'text-slate-600' : 'text-gray-400'}>•</span>
-                        <span className={dark ? 'text-slate-500' : 'text-gray-500'}>
-                          {formatTimeAgo(event.timestamp)}
-                        </span>
+                      <span className={`text-xs px-2 py-0.5 rounded border font-medium shrink-0 ${sevBadge(t.threat_score)}`}>
+                        {sevLabel(t.threat_score)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Scan breakdown */}
+              <div className={`${card} rounded-2xl overflow-hidden`}>
+                <div className={`px-5 py-3 border-b ${dark ? 'border-surface-400' : 'border-gray-200'}`}>
+                  <h3 className={`font-semibold text-sm ${text}`}>Threat Breakdown</h3>
+                </div>
+                <div className="p-5 space-y-4">
+                  {[
+                    { label: 'URL Threats', value: threats.filter(t => t.type === 'url').length, total: stats?.total_scans ?? 1, color: 'bg-red-500' },
+                    { label: 'Device Threats', value: threats.filter(t => t.type === 'device').length, total: stats?.total_scans ?? 1, color: 'bg-orange-500' },
+                    { label: 'Clean Scans', value: stats?.clean_scans ?? 0, total: stats?.total_scans ?? 1, color: 'bg-green-500' },
+                  ].map(item => (
+                    <div key={item.label}>
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className={muted}>{item.label}</span>
+                        <span className={text}>{item.value}</span>
+                      </div>
+                      <div className={`h-1.5 rounded-full ${dark ? 'bg-surface-600' : 'bg-gray-100'}`}>
+                        <div className={`h-1.5 rounded-full ${item.color} transition-all duration-700`}
+                          style={{ width: `${Math.min((item.value / item.total) * 100, 100)}%` }} />
                       </div>
                     </div>
-                    <button className={`text-xs px-2 py-1 rounded ${dark ? 'text-slate-400 hover:text-slate-200' : 'text-gray-500 hover:text-gray-700'}`}>
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-                      </svg>
-                    </button>
-                  </div>
+                  ))}
                 </div>
-              ))}
+              </div>
             </div>
-          </div>
-
-          {/* Top Threat Sources */}
-          <div className={`rounded-2xl ${dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-gray-200'}`}>
-            <div className="p-4 sm:p-6 border-b border-current border-opacity-10">
-              <h3 className={`font-semibold ${dark ? 'text-slate-100' : 'text-gray-900'}`}>
-                Top Threat Sources
-              </h3>
-            </div>
-            
-            <div className="p-4 sm:p-6 space-y-4">
-              {[
-                { ip: '203.0.113.5', count: 78, country: 'Unknown' },
-                { ip: '192.168.1.100', count: 120, country: 'US' },
-                { ip: '10.0.0.1', count: 56, country: 'CN' },
-                { ip: '10.0.0.1', count: 56, country: 'RU' },
-              ].map((source, index) => (
-                <div key={index} className="flex items-center justify-between">
-                  <div>
-                    <p className={`font-mono text-sm ${dark ? 'text-slate-200' : 'text-gray-900'}`}>
-                      {source.ip}
-                    </p>
-                    <p className={`text-xs ${dark ? 'text-slate-500' : 'text-gray-500'}`}>
-                      {source.country}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className={`font-bold text-sm ${dark ? 'text-slate-100' : 'text-gray-900'}`}>
-                      {source.count}
-                    </p>
-                    <p className={`text-xs ${dark ? 'text-slate-500' : 'text-gray-500'}`}>
-                      attempts
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+          </>
+        )}
       </div>
     </AppLayout>
   )

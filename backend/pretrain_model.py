@@ -47,19 +47,19 @@ def train_model():
         test_path = data_dir / "KDDTest+.txt"
         
         if not train_path.exists() or not test_path.exists():
-            logger.warning("Training data not found. Model will be trained on first use."
+            logger.warning("Training data not found. Model will be trained on first use.")
             return False
         
-        logger.info("Loading and preprocessing data..."
+        logger.info("Loading and preprocessing data...")
         train_df, test_df = load_data(str(train_path), str(test_path))
         X_train, y_train, _, _ = preprocess(train_df, test_df, str(models_dir))
         
-        logger.info("Splitting data for training..."
+        logger.info("Splitting data for training...")
         X_tr, _, y_tr, _ = train_test_split(
             X_train, y_train, test_size=0.1, random_state=42, stratify=y_train
         )
         
-        logger.info("Training MLP classifier..."
+        logger.info("Training MLP classifier...")
         model = MLPClassifier(
             hidden_layer_sizes=(256, 128, 64),
             activation='relu',

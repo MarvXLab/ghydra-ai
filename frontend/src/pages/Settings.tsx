@@ -46,7 +46,7 @@ export default function Settings() {
     <div className={`flex min-h-screen ${dark ? 'bg-surface-900' : 'bg-light-bg'}`}>
       <Sidebar />
 
-      <main className="ml-56 flex-1 p-6 space-y-6 max-w-2xl">
+      <main className="md:ml-56 flex-1 p-4 md:p-6 pt-16 md:pt-6 space-y-6 max-w-2xl">
         <div>
           <h1 className={`text-xl font-bold ${text}`}>Settings</h1>
           <p className={`text-xs mt-0.5 ${muted}`}>Configuration and diagnostics</p>

@@ -67,7 +67,7 @@ export default function Network() {
     <div className={`flex min-h-screen ${dark ? 'bg-surface-900' : 'bg-light-bg'}`}>
       <Sidebar />
 
-      <main className="ml-56 flex-1 p-6 space-y-6 max-w-3xl">
+      <main className="md:ml-56 flex-1 p-4 md:p-6 pt-16 md:pt-6 space-y-6">
         {/* Header */}
         <div>
           <h1 className={`text-xl font-bold ${text}`}>Network Scanner</h1>

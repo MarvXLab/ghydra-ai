@@ -68,7 +68,7 @@ export default function Dashboard() {
     <div className={`flex min-h-screen ${dark ? 'bg-surface-900' : 'bg-light-bg'}`}>
       <Sidebar />
 
-      <main className="ml-56 flex-1 p-6 space-y-6">
+      <main className="md:ml-56 flex-1 p-4 md:p-6 pt-16 md:pt-6 space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>

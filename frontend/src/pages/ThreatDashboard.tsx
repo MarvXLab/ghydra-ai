@@ -102,8 +102,6 @@ export default function ThreatDashboard() {
     }
   }
 
-  const sevColor = (score: number) =>
-    score >= 0.7 ? 'text-red-500' : score >= 0.4 ? 'text-orange-500' : 'text-yellow-500'
   const sevBadge = (score: number) =>
     score >= 0.7 ? 'bg-red-100 text-red-700 border-red-200' :
     score >= 0.4 ? 'bg-orange-100 text-orange-700 border-orange-200' :

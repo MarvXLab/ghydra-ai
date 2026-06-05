@@ -444,7 +444,9 @@ async def google_login():
     return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{params}")
 
 @app.get("/auth/google/callback")
-async def google_callback(code: str, db: AsyncSession = Depends(get_db)):
+async def google_callback(request: Request, db: AsyncSession = Depends(get_db)):
+    code = request.query_params.get("code")
+    if not code: raise HTTPException(400, "Missing code")
     from fastapi.responses import RedirectResponse
     async with httpx.AsyncClient() as client:
         token_r = await client.post("https://oauth2.googleapis.com/token", data={
@@ -543,7 +545,9 @@ async def github_login():
     return RedirectResponse(f"https://github.com/login/oauth/authorize?client_id={GITHUB_CLIENT_ID}&redirect_uri={BACKEND_URL}/auth/github/callback&scope=user:email")
 
 @app.get("/auth/github/callback")
-async def github_callback(code: str, db: AsyncSession = Depends(get_db)):
+async def github_callback(request: Request, db: AsyncSession = Depends(get_db)):
+    code = request.query_params.get("code")
+    if not code: raise HTTPException(400, "Missing code")
     from fastapi.responses import RedirectResponse
     async with httpx.AsyncClient() as client:
         token_r = await client.post("https://github.com/login/oauth/access_token",

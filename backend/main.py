@@ -46,6 +46,12 @@ class User(Base):
     avatar_url        = Column(String, nullable=True)
     username          = Column(String, unique=True, nullable=True)
     bio               = Column(String, nullable=True)
+    is_developer      = Column(Boolean, default=False)
+    pronouns          = Column(String, nullable=True)
+    dev_url           = Column(String, nullable=True)
+    company           = Column(String, nullable=True)
+    location          = Column(String, nullable=True)
+    social_links      = Column(JSON, default=list)
     otp_codes         = relationship("OTPCode", back_populates="user")
     scans             = relationship("Scan", back_populates="user")
     devices           = relationship("Device", back_populates="user")
@@ -220,6 +226,12 @@ async def lifespan(app: FastAPI):
         for sql in [
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR UNIQUE",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS bio VARCHAR",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_developer BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS pronouns VARCHAR",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS dev_url VARCHAR",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS company VARCHAR",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS location VARCHAR",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS social_links JSON DEFAULT '[]'",
         ]:
             try: await conn.execute(__import__('sqlalchemy').text(sql))
             except Exception as e: logger.warning("Migration warning: %s", e)
@@ -348,10 +360,49 @@ class DeviceLink(BaseModel):
         if len(v) > 60: raise ValueError('Device name too long')
         return v.strip()
 
+class DevProfileUpdate(BaseModel):
+    pronouns:     Optional[str] = None
+    dev_url:      Optional[str] = None
+    company:      Optional[str] = None
+    location:     Optional[str] = None
+    social_links: Optional[list] = None
+    bio:          Optional[str] = None
+    full_name:    Optional[str] = None
+
+    @field_validator('pronouns', 'company', 'location')
+    @classmethod
+    def cap60(cls, v): return v[:60] if v else v
+
+    @field_validator('dev_url')
+    @classmethod
+    def validate_url(cls, v):
+        if v and not (v.startswith('https://') or v.startswith('http://')):
+            raise ValueError('Must be a valid URL')
+        return v[:200] if v else v
+
+    @field_validator('social_links')
+    @classmethod
+    def validate_socials(cls, v):
+        if v is None: return v
+        if len(v) > 4: raise ValueError('Max 4 social links')
+        cleaned = []
+        for s in v:
+            if not isinstance(s, str): raise ValueError('Links must be strings')
+            s = s.strip()[:200]
+            if s and not (s.startswith('https://') or s.startswith('http://')):
+                raise ValueError('Links must be URLs')
+            cleaned.append(s)
+        return cleaned
+
+class OTPCodeOnly(BaseModel):
+    code: str
+
 class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
     website: Optional[str] = None
+
+    otp_code: Optional[str] = None
 
     @field_validator('name')
     @classmethod
@@ -527,6 +578,10 @@ async def get_me(current_user: User = Depends(require_user)):
     return {"id": current_user.id, "email": current_user.email, "full_name": current_user.full_name,
             "username": current_user.username, "bio": current_user.bio,
             "avatar_url": current_user.avatar_url, "subscription_tier": current_user.subscription_tier,
+            "is_developer": bool(current_user.is_developer),
+            "pronouns": current_user.pronouns, "dev_url": current_user.dev_url,
+            "company": current_user.company, "location": current_user.location,
+            "social_links": current_user.social_links or [],
             "created_at": current_user.created_at.isoformat() if current_user.created_at else None}
 
 @app.put("/auth/profile")
@@ -574,6 +629,63 @@ async def unlink_device(device_id: str, db: AsyncSession = Depends(get_db),
     device.is_active = False; await db.commit()
     return {"message": "Device unlinked"}
 
+# ── Developer enrolment ──────────────────────────────────────────
+@app.post("/developer/enroll/request")
+@limiter.limit("3/minute")
+async def dev_enroll_request(request: Request, db: AsyncSession = Depends(get_db),
+                              current_user: User = Depends(require_user)):
+    if current_user.is_developer:
+        raise HTTPException(400, "Already a developer")
+    code = "".join(str(secrets.randbelow(10)) for _ in range(6))
+    db.add(OTPCode(user_id=current_user.id, code=code, purpose="developer_enroll",
+                   expires_at=datetime.now(timezone.utc) + timedelta(minutes=10)))
+    await db.commit()
+    sent = await send_otp_email(current_user.email, code, current_user.full_name)
+    return {"message": "Verification code sent", "debug_code": None if sent else code}
+
+@app.post("/developer/enroll/verify")
+@limiter.limit("5/minute")
+async def dev_enroll_verify(data: OTPCodeOnly, request: Request, db: AsyncSession = Depends(get_db),
+                             current_user: User = Depends(require_user)):
+    otr = await db.execute(select(OTPCode).where(and_(
+        OTPCode.user_id == current_user.id, OTPCode.code == data.code,
+        OTPCode.purpose == "developer_enroll", OTPCode.used == False,
+        OTPCode.expires_at > datetime.now(timezone.utc)
+    )))
+    otp = otr.scalar_one_or_none()
+    if not otp: raise HTTPException(400, "Invalid or expired code")
+    current_user.is_developer = True; otp.used = True
+    await db.commit()
+    return {"message": "Developer account activated"}
+
+@app.put("/developer/profile")
+async def update_dev_profile(data: DevProfileUpdate, db: AsyncSession = Depends(get_db),
+                              current_user: User = Depends(require_user)):
+    if not current_user.is_developer:
+        raise HTTPException(403, "Developer account required")
+    if data.full_name is not None: current_user.full_name = data.full_name
+    if data.bio is not None: current_user.bio = data.bio
+    if data.pronouns is not None: current_user.pronouns = data.pronouns
+    if data.dev_url is not None: current_user.dev_url = data.dev_url
+    if data.company is not None: current_user.company = data.company
+    if data.location is not None: current_user.location = data.location
+    if data.social_links is not None: current_user.social_links = data.social_links
+    await db.commit()
+    return {"message": "Developer profile updated"}
+
+@app.post("/developer/projects/request-key")
+@limiter.limit("3/minute")
+async def request_project_key_otp(request: Request, db: AsyncSession = Depends(get_db),
+                                   current_user: User = Depends(require_user)):
+    if not current_user.is_developer:
+        raise HTTPException(403, "Developer account required")
+    code = "".join(str(secrets.randbelow(10)) for _ in range(6))
+    db.add(OTPCode(user_id=current_user.id, code=code, purpose="create_project",
+                   expires_at=datetime.now(timezone.utc) + timedelta(minutes=10)))
+    await db.commit()
+    sent = await send_otp_email(current_user.email, code, current_user.full_name)
+    return {"message": "Verification code sent", "debug_code": None if sent else code}
+
 # ── Developer Portal ─────────────────────────────────────────────
 @app.get("/developer/projects")
 async def list_projects(db: AsyncSession = Depends(get_db), current_user: User = Depends(require_user)):
@@ -584,6 +696,18 @@ async def list_projects(db: AsyncSession = Depends(get_db), current_user: User =
 @app.post("/developer/projects")
 async def create_project(data: ProjectCreate, db: AsyncSession = Depends(get_db),
                           current_user: User = Depends(require_user)):
+    if not current_user.is_developer:
+        raise HTTPException(403, "Developer account required")
+    if not data.otp_code:
+        raise HTTPException(400, "Verification code required")
+    otr = await db.execute(select(OTPCode).where(and_(
+        OTPCode.user_id == current_user.id, OTPCode.code == data.otp_code,
+        OTPCode.purpose == "create_project", OTPCode.used == False,
+        OTPCode.expires_at > datetime.now(timezone.utc)
+    )))
+    otp = otr.scalar_one_or_none()
+    if not otp: raise HTTPException(400, "Invalid or expired verification code")
+    otp.used = True
     # Limit: free=3 projects, pro=unlimited
     r = await db.execute(select(Project).where(Project.user_id == current_user.id, Project.is_active == True))
     existing = r.scalars().all()

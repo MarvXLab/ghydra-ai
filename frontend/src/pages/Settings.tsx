@@ -6,6 +6,8 @@ import api from '../lib/api'
 interface UserProfile {
   id: string; email: string; full_name: string; username: string | null
   bio: string | null; avatar_url: string | null; subscription_tier: string; created_at: string
+  is_developer: boolean; pronouns: string | null; dev_url: string | null
+  company: string | null; location: string | null; social_links: string[]
 }
 
 interface Device {
@@ -256,6 +258,23 @@ export default function Settings() {
   const [deleteModal, setDeleteModal] = useState<{ id: string; name: string } | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState('')
   const DELETE_PHRASE = 'delete this project'
+  // Developer enrolment flow
+  type DevStep = 'locked' | 'sending' | 'otp' | 'verifying' | 'profile' | 'projects'
+  const [devStep, setDevStep] = useState<DevStep>('locked')
+  const [devOtp, setDevOtp] = useState('')
+  const [devOtpError, setDevOtpError] = useState('')
+  // Developer profile form
+  const [devForm, setDevForm] = useState({
+    full_name: '', bio: '', pronouns: '', dev_url: '', company: '', location: '',
+    social_links: ['', '', '', '']
+  })
+  const [devSaving, setDevSaving] = useState(false)
+  const [devSaved, setDevSaved] = useState(false)
+  // Project OTP gate
+  type ProjStep = 'form' | 'sending' | 'otp' | 'verifying'
+  const [projStep, setProjStep] = useState<ProjStep>('form')
+  const [projOtp, setProjOtp] = useState('')
+  const [projOtpError, setProjOtpError] = useState('')
 
   const card = dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-gray-200'
   const text = dark ? 'text-slate-100' : 'text-gray-900'
@@ -264,7 +283,27 @@ export default function Settings() {
     ${dark ? 'bg-surface-900 border-surface-400 text-slate-100 focus:border-accent placeholder-slate-600'
            : 'bg-gray-50 border-gray-200 text-gray-900 focus:border-accent placeholder-gray-400'}`
 
-  useEffect(() => { fetchProfile(); fetchDevices(); fetchProjects() }, [])
+  useEffect(() => {
+    fetchProfile(); fetchDevices(); fetchProjects()
+  }, [])
+
+  useEffect(() => {
+    if (!profile) return
+    if (profile.is_developer) {
+      setDevStep('projects')
+      setDevForm({
+        full_name: profile.full_name || '',
+        bio: profile.bio || '',
+        pronouns: profile.pronouns || '',
+        dev_url: profile.dev_url || '',
+        company: profile.company || '',
+        location: profile.location || '',
+        social_links: [...(profile.social_links || []), '', '', '', ''].slice(0, 4)
+      })
+    } else {
+      setDevStep('locked')
+    }
+  }, [profile])
 
   async function fetchProjects() {
     try { const res = await api.get('/developer/projects'); setProjects(res.data) }
@@ -273,16 +312,61 @@ export default function Settings() {
 
   async function createProject() {
     if (!newProject.name.trim()) return
-    setCreatingProject(true)
-    try {
-      await api.post('/developer/projects', newProject)
-      setNewProject({ name: '', description: '', website: '' })
-      fetchProjects()
-    } catch (e: any) { setError(e.response?.data?.detail || 'Failed to create project') }
-    setCreatingProject(false)
+    // Step 1: request OTP
+    if (projStep === 'form') {
+      setProjStep('sending')
+      try {
+        await api.post('/developer/projects/request-key')
+        setProjStep('otp')
+      } catch (e: any) { setError(e.response?.data?.detail || 'Failed to send code'); setProjStep('form') }
+      return
+    }
+    // Step 2: verify OTP + create
+    if (projStep === 'otp') {
+      if (!projOtp.trim()) { setProjOtpError('Enter the code'); return }
+      setProjStep('verifying'); setCreatingProject(true)
+      try {
+        await api.post('/developer/projects', { ...newProject, otp_code: projOtp })
+        setNewProject({ name: '', description: '', website: '' })
+        setProjOtp(''); setProjStep('form'); setProjOtpError('')
+        fetchProjects()
+      } catch (e: any) { setProjOtpError(e.response?.data?.detail || 'Invalid code'); setProjStep('otp') }
+      setCreatingProject(false)
+    }
   }
 
-  async function deleteProject(id: string) {
+  async function requestDevEnroll() {
+    setDevStep('sending')
+    try {
+      await api.post('/developer/enroll/request')
+      setDevStep('otp')
+    } catch (e: any) { setError(e.response?.data?.detail || 'Failed to send code'); setDevStep('locked') }
+  }
+
+  async function verifyDevEnroll() {
+    if (!devOtp.trim()) { setDevOtpError('Enter the code'); return }
+    setDevStep('verifying')
+    try {
+      await api.post('/developer/enroll/verify', { code: devOtp })
+      setDevOtp(''); setDevOtpError('')
+      setDevStep('profile')
+      await fetchProfile()
+    } catch (e: any) { setDevOtpError(e.response?.data?.detail || 'Invalid code'); setDevStep('otp') }
+  }
+
+  async function saveDevProfile() {
+    setDevSaving(true)
+    try {
+      await api.put('/developer/profile', {
+        ...devForm,
+        social_links: devForm.social_links.filter(s => s.trim())
+      })
+      setDevSaved(true); setTimeout(() => setDevSaved(false), 2500)
+      setDevStep('projects')
+      await fetchProfile()
+    } catch (e: any) { setError(e.response?.data?.detail || 'Failed to save') }
+    setDevSaving(false)
+  }
     try { await api.delete(`/developer/projects/${id}`); fetchProjects(); setDeleteModal(null); setDeleteConfirm('') }
     catch { /* ignore */ }
   }
@@ -586,67 +670,261 @@ export default function Settings() {
           {/* ── Developer Tab ── */}
           {tab === 'developer' && (
             <div className="space-y-4">
-              <div className={`${card} rounded-2xl p-6`}>
-                <h2 className={`font-semibold mb-1 ${text}`}>Developer Portal</h2>
-                <p className={`text-xs mb-5 ${muted}`}>Create a project to get an API key. Integrate Ghydra threat detection into your own apps.</p>
 
-                {/* Create project form */}
-                <div className="space-y-3 mb-6">
-                  <input value={newProject.name} onChange={e => setNewProject(p => ({...p, name: e.target.value}))}
-                    placeholder="Project name *" className={input} />
-                  <input value={newProject.description} onChange={e => setNewProject(p => ({...p, description: e.target.value}))}
-                    placeholder="Description (optional)" className={input} />
-                  <input value={newProject.website} onChange={e => setNewProject(p => ({...p, website: e.target.value}))}
-                    placeholder="Website URL (optional)" className={input} />
-                  <button onClick={createProject} disabled={creatingProject || !newProject.name.trim()}
-                    className="w-full bg-accent hover:bg-accent-dim disabled:opacity-50 text-white text-sm font-medium py-2.5 rounded-xl transition-colors">
-                    {creatingProject ? 'Creating...' : '+ Create Project'}
-                  </button>
-                </div>
-
-                {/* Project list */}
-                <div className="space-y-3">
-                  {projects.length === 0 ? (
-                    <p className={`text-sm text-center py-4 ${muted}`}>No projects yet.</p>
-                  ) : projects.map(p => (
-                    <div key={p.id} className={`rounded-xl p-4 ${dark ? 'bg-surface-700' : 'bg-gray-50'}`}>
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className={`font-medium text-sm ${text}`}>{p.name}</p>
-                          {p.website && <p className={`text-xs truncate ${muted}`}>{p.website}</p>}
-                          <div className="flex items-center gap-2 mt-2">
-                            <code className={`text-xs font-mono px-2 py-1 rounded ${dark ? 'bg-surface-900 text-green-400' : 'bg-gray-100 text-gray-700'}`}>
-                              {revealedKey === p.id ? p.api_key : 'ghk_••••••••••••••••'}
-                            </code>
-                            <button onClick={() => setRevealedKey(revealedKey === p.id ? null : p.id)}
-                              className={`text-xs ${muted} hover:text-accent transition-colors`}>
-                              {revealedKey === p.id ? 'Hide' : 'Reveal'}
-                            </button>
-                            <button onClick={() => navigator.clipboard.writeText(p.api_key)}
-                              className={`text-xs ${muted} hover:text-accent transition-colors`}>
-                              Copy
-                            </button>
-                          </div>
-                        </div>
-                        <button onClick={() => { setDeleteModal({ id: p.id, name: p.name }); setDeleteConfirm('') }}
-                          className="text-xs text-red-400 hover:text-red-600 shrink-0">Delete</button>
+              {/* LOCKED — not a developer yet */}
+              {(devStep === 'locked' || devStep === 'sending') && (
+                <div className={`${card} rounded-2xl p-8 text-center`}>
+                  <div className="w-14 h-14 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-4">
+                    <svg className="w-7 h-7 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                    </svg>
+                  </div>
+                  <h2 className={`font-bold text-lg mb-2 ${text}`}>Become a Developer</h2>
+                  <p className={`text-sm mb-6 max-w-sm mx-auto ${muted}`}>
+                    Integrate Ghydra threat detection into your apps. Get API keys, view analytics, and protect your users.
+                  </p>
+                  <div className={`text-left rounded-xl p-4 mb-6 space-y-2 ${dark ? 'bg-surface-700' : 'bg-gray-50'}`}>
+                    {['Get project API keys','Real-time threat analytics dashboard','Integration guides for HTML, React, Python & more','User behaviour analytics (Pro)'].map(f => (
+                      <div key={f} className="flex items-center gap-2">
+                        <svg className="w-4 h-4 text-accent shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                        </svg>
+                        <span className={`text-sm ${text}`}>{f}</span>
                       </div>
-                      <a href={`/developer/${p.id}/analytics`}
-                        className="mt-3 flex items-center gap-1 text-xs text-accent hover:underline">
-                        View Analytics →
-                      </a>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
+                  <button onClick={requestDevEnroll} disabled={devStep === 'sending'}
+                    className="bg-accent hover:bg-accent-dim disabled:opacity-50 text-white font-medium px-8 py-3 rounded-xl transition-colors">
+                    {devStep === 'sending' ? 'Sending code...' : 'Get Started — Verify Email'}
+                  </button>
+                  <p className={`text-xs mt-3 ${muted}`}>A verification code will be sent to {profile?.email}</p>
                 </div>
-              </div>
+              )}
 
-              <div className={`${card} rounded-2xl overflow-hidden`}>
-                <div className={`px-5 py-4 border-b ${dark ? 'border-surface-400' : 'border-gray-200'}`}>
-                  <h3 className={`font-semibold text-sm ${text}`}>Integration Guide</h3>
-                  <p className={`text-xs mt-0.5 ${muted}`}>Replace <code className="text-accent">YOUR_API_KEY</code> with your project key above.</p>
+              {/* OTP verification step */}
+              {(devStep === 'otp' || devStep === 'verifying') && (
+                <div className={`${card} rounded-2xl p-8 text-center`}>
+                  <div className="w-14 h-14 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-4">
+                    <svg className="w-7 h-7 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                  </div>
+                  <h2 className={`font-bold text-lg mb-1 ${text}`}>Check your email</h2>
+                  <p className={`text-sm mb-6 ${muted}`}>Enter the 6-digit code sent to <span className="text-accent">{profile?.email}</span></p>
+                  <input value={devOtp} onChange={e => { setDevOtp(e.target.value.replace(/\D/g,'').slice(0,6)); setDevOtpError('') }}
+                    placeholder="000000" maxLength={6}
+                    className={`w-40 text-center text-2xl font-mono tracking-widest px-4 py-3 rounded-xl border outline-none mx-auto block mb-2 transition-all
+                      ${dark ? 'bg-surface-900 border-surface-400 text-slate-100 focus:border-accent' : 'bg-gray-50 border-gray-200 text-gray-900 focus:border-accent'}
+                      ${devOtpError ? 'border-red-500' : ''}`} />
+                  {devOtpError && <p className="text-xs text-red-500 mb-3">{devOtpError}</p>}
+                  <button onClick={verifyDevEnroll} disabled={devStep === 'verifying' || devOtp.length < 6}
+                    className="bg-accent hover:bg-accent-dim disabled:opacity-50 text-white font-medium px-8 py-3 rounded-xl transition-colors mb-3">
+                    {devStep === 'verifying' ? 'Verifying...' : 'Verify & Activate'}
+                  </button>
+                  <br />
+                  <button onClick={() => setDevStep('locked')} className={`text-xs ${muted} hover:text-accent`}>← Go back</button>
                 </div>
-                <CodeSnippets dark={dark} />
-              </div>
+              )}
+
+              {/* Developer profile setup */}
+              {devStep === 'profile' && (
+                <div className={`${card} rounded-2xl p-6`}>
+                  <div className="flex items-center gap-3 mb-5">
+                    <div className="w-10 h-10 rounded-xl bg-green-500/10 flex items-center justify-center shrink-0">
+                      <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                    <div>
+                      <h2 className={`font-bold ${text}`}>Developer account activated!</h2>
+                      <p className={`text-xs ${muted}`}>Set up your public developer profile</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className={`block text-xs font-medium mb-1 ${muted}`}>Name</label>
+                        <input value={devForm.full_name} onChange={e => setDevForm(f => ({...f, full_name: e.target.value}))}
+                          placeholder="Your name" className={input} />
+                      </div>
+                      <div>
+                        <label className={`block text-xs font-medium mb-1 ${muted}`}>Pronouns</label>
+                        <input value={devForm.pronouns} onChange={e => setDevForm(f => ({...f, pronouns: e.target.value}))}
+                          placeholder="e.g. he/him" className={input} />
+                      </div>
+                    </div>
+                    <div>
+                      <label className={`block text-xs font-medium mb-1 ${muted}`}>Bio</label>
+                      <textarea value={devForm.bio} onChange={e => setDevForm(f => ({...f, bio: e.target.value}))}
+                        placeholder="Web & App Developer | ..." rows={3} className={input + ' resize-none'} />
+                    </div>
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className={`block text-xs font-medium mb-1 ${muted}`}>Company</label>
+                        <input value={devForm.company} onChange={e => setDevForm(f => ({...f, company: e.target.value}))}
+                          placeholder="Your company" className={input} />
+                      </div>
+                      <div>
+                        <label className={`block text-xs font-medium mb-1 ${muted}`}>Location</label>
+                        <input value={devForm.location} onChange={e => setDevForm(f => ({...f, location: e.target.value}))}
+                          placeholder="City, Country" className={input} />
+                      </div>
+                    </div>
+                    <div>
+                      <label className={`block text-xs font-medium mb-1 ${muted}`}>URL</label>
+                      <input value={devForm.dev_url} onChange={e => setDevForm(f => ({...f, dev_url: e.target.value}))}
+                        placeholder="https://yoursite.com" className={input} />
+                    </div>
+                    <div>
+                      <label className={`block text-xs font-medium mb-1.5 ${muted}`}>Social accounts</label>
+                      <div className="space-y-2">
+                        {devForm.social_links.map((s, i) => (
+                          <input key={i} value={s}
+                            onChange={e => setDevForm(f => { const sl = [...f.social_links]; sl[i] = e.target.value; return {...f, social_links: sl} })}
+                            placeholder={`Link to social profile ${i + 1}`} className={input} />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 mt-5">
+                    <button onClick={() => setDevStep('projects')} className={`px-4 py-2.5 rounded-xl text-sm border transition-colors ${dark ? 'border-surface-400 text-slate-300 hover:bg-surface-600' : 'border-gray-200 text-gray-700 hover:bg-gray-50'}`}>
+                      Skip for now
+                    </button>
+                    <button onClick={saveDevProfile} disabled={devSaving}
+                      className="flex-1 bg-accent hover:bg-accent-dim disabled:opacity-50 text-white text-sm font-medium py-2.5 rounded-xl transition-colors">
+                      {devSaving ? 'Saving...' : devSaved ? 'Saved ✓' : 'Save Profile & Continue'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Fully unlocked developer portal */}
+              {devStep === 'projects' && (
+                <>
+                  {/* Developer profile card */}
+                  <div className={`${card} rounded-2xl p-5`}>
+                    <div className="flex items-start justify-between gap-3 mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-full overflow-hidden bg-accent/20 flex items-center justify-center shrink-0">
+                          {profile?.avatar_url
+                            ? <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" />
+                            : <span className="text-xl font-bold text-accent">{(profile?.full_name || 'D')[0].toUpperCase()}</span>}
+                        </div>
+                        <div>
+                          <p className={`font-semibold ${text}`}>{profile?.full_name}</p>
+                          <p className={`text-xs ${muted}`}>@{profile?.username || profile?.email?.split('@')[0]}</p>
+                          {profile?.pronouns && <p className={`text-xs ${muted}`}>{profile.pronouns}</p>}
+                        </div>
+                      </div>
+                      <button onClick={() => setDevStep('profile')}
+                        className={`text-xs px-3 py-1.5 rounded-lg border transition-colors shrink-0 ${dark ? 'border-surface-400 text-slate-300 hover:bg-surface-600' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+                        Edit profile
+                      </button>
+                    </div>
+                    {profile?.bio && <p className={`text-sm mb-3 ${text}`}>{profile.bio}</p>}
+                    <div className={`flex flex-wrap gap-x-4 gap-y-1 text-xs ${muted}`}>
+                      {profile?.company && <span>🏢 {profile.company}</span>}
+                      {profile?.location && <span>📍 {profile.location}</span>}
+                      {profile?.dev_url && <a href={profile.dev_url} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">🔗 {profile.dev_url}</a>}
+                    </div>
+                    {(profile?.social_links?.filter(s => s).length ?? 0) > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-3">
+                        {profile!.social_links.filter(s => s).map((s, i) => (
+                          <a key={i} href={s} target="_blank" rel="noopener noreferrer"
+                            className={`text-xs px-3 py-1 rounded-full border hover:text-accent transition-colors ${dark ? 'border-surface-400 text-slate-400' : 'border-gray-200 text-gray-500'}`}>
+                            {new URL(s).hostname.replace('www.', '')}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Create project */}
+                  <div className={`${card} rounded-2xl p-6`}>
+                    <h2 className={`font-semibold mb-1 ${text}`}>Projects</h2>
+                    <p className={`text-xs mb-4 ${muted}`}>Each project gets its own API key. A verification code will be sent to your email before the key is issued.</p>
+
+                    {(projStep === 'form' || projStep === 'sending') && (
+                      <div className="space-y-3 mb-6">
+                        <input value={newProject.name} onChange={e => setNewProject(p => ({...p, name: e.target.value}))}
+                          placeholder="Project name *" className={input} />
+                        <input value={newProject.description} onChange={e => setNewProject(p => ({...p, description: e.target.value}))}
+                          placeholder="Description (optional)" className={input} />
+                        <input value={newProject.website} onChange={e => setNewProject(p => ({...p, website: e.target.value}))}
+                          placeholder="Website URL (optional)" className={input} />
+                        <button onClick={createProject} disabled={projStep === 'sending' || !newProject.name.trim()}
+                          className="w-full bg-accent hover:bg-accent-dim disabled:opacity-50 text-white text-sm font-medium py-2.5 rounded-xl transition-colors">
+                          {projStep === 'sending' ? 'Sending verification code...' : '+ Create Project'}
+                        </button>
+                      </div>
+                    )}
+
+                    {(projStep === 'otp' || projStep === 'verifying') && (
+                      <div className={`rounded-xl p-4 mb-6 ${dark ? 'bg-surface-700' : 'bg-gray-50'}`}>
+                        <p className={`text-sm font-medium mb-1 ${text}`}>Verify to create project</p>
+                        <p className={`text-xs mb-3 ${muted}`}>Enter the 6-digit code sent to {profile?.email}</p>
+                        <div className="flex gap-2">
+                          <input value={projOtp} onChange={e => { setProjOtp(e.target.value.replace(/\D/g,'').slice(0,6)); setProjOtpError('') }}
+                            placeholder="000000" maxLength={6}
+                            className={`flex-1 text-center font-mono tracking-widest px-3 py-2.5 rounded-xl border outline-none text-sm transition-all
+                              ${dark ? 'bg-surface-900 border-surface-400 text-slate-100 focus:border-accent' : 'bg-white border-gray-200 text-gray-900 focus:border-accent'}
+                              ${projOtpError ? 'border-red-500' : ''}`} />
+                          <button onClick={createProject} disabled={projStep === 'verifying' || projOtp.length < 6 || creatingProject}
+                            className="bg-accent hover:bg-accent-dim disabled:opacity-50 text-white text-sm font-medium px-4 rounded-xl transition-colors">
+                            {creatingProject ? '...' : 'Confirm'}
+                          </button>
+                        </div>
+                        {projOtpError && <p className="text-xs text-red-500 mt-2">{projOtpError}</p>}
+                        <button onClick={() => { setProjStep('form'); setProjOtp(''); setProjOtpError('') }}
+                          className={`text-xs mt-2 ${muted} hover:text-accent`}>← Cancel</button>
+                      </div>
+                    )}
+
+                    {/* Project list */}
+                    <div className="space-y-3">
+                      {projects.length === 0
+                        ? <p className={`text-sm text-center py-4 ${muted}`}>No projects yet.</p>
+                        : projects.map(p => (
+                          <div key={p.id} className={`rounded-xl p-4 ${dark ? 'bg-surface-700' : 'bg-gray-50'}`}>
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className={`font-medium text-sm ${text}`}>{p.name}</p>
+                                {p.website && <p className={`text-xs truncate ${muted}`}>{p.website}</p>}
+                                <div className="flex items-center gap-2 mt-2">
+                                  <code className={`text-xs font-mono px-2 py-1 rounded ${dark ? 'bg-surface-900 text-green-400' : 'bg-gray-100 text-gray-700'}`}>
+                                    {revealedKey === p.id ? p.api_key : 'ghk_••••••••••••••••'}
+                                  </code>
+                                  <button onClick={() => setRevealedKey(revealedKey === p.id ? null : p.id)}
+                                    className={`text-xs ${muted} hover:text-accent transition-colors`}>
+                                    {revealedKey === p.id ? 'Hide' : 'Reveal'}
+                                  </button>
+                                  <button onClick={() => navigator.clipboard.writeText(p.api_key)}
+                                    className={`text-xs ${muted} hover:text-accent transition-colors`}>Copy</button>
+                                </div>
+                              </div>
+                              <button onClick={() => { setDeleteModal({ id: p.id, name: p.name }); setDeleteConfirm('') }}
+                                className="text-xs text-red-400 hover:text-red-600 shrink-0">Delete</button>
+                            </div>
+                            <a href={`/developer/${p.id}/analytics`}
+                              className="mt-3 flex items-center gap-1 text-xs text-accent hover:underline">View Analytics →</a>
+                          </div>
+                        ))
+                      }
+                    </div>
+                  </div>
+
+                  {/* Integration guide */}
+                  <div className={`${card} rounded-2xl overflow-hidden`}>
+                    <div className={`px-5 py-4 border-b ${dark ? 'border-surface-400' : 'border-gray-200'}`}>
+                      <h3 className={`font-semibold text-sm ${text}`}>Integration Guide</h3>
+                      <p className={`text-xs mt-0.5 ${muted}`}>Replace <code className="text-accent">YOUR_API_KEY</code> with your project key above.</p>
+                    </div>
+                    <CodeSnippets dark={dark} />
+                  </div>
+                </>
+              )}
             </div>
           )}
 

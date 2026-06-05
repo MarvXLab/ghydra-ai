@@ -8,7 +8,6 @@ const TIME_RANGES = ['Live', '1h', '4h', '7h', '24h', '1w', '1m', '3m', '6m', '1
 type Range = typeof TIME_RANGES[number]
 
 function generateDataPoints(range: Range, spikeAt?: number) {
-  const now = Date.now()
   const counts: Record<Range, number> = {
     'Live': 30, '1h': 60, '4h': 48, '7h': 42, '24h': 48,
     '1w': 56, '1m': 60, '3m': 90, '6m': 72, '1y': 52
@@ -154,7 +153,7 @@ export default function Network() {
               <Tooltip
                 contentStyle={{ background: dark ? '#13161e' : '#fff', border: '1px solid #374151', borderRadius: 8, fontSize: 12 }}
                 labelStyle={{ color: dark ? '#e2e8f0' : '#1f2937' }}
-                formatter={(v: number) => [`${v} MB/s`, 'Usage']}
+                formatter={(v: number | string | undefined) => [`${v} MB/s`, 'Usage']}
               />
               {spikePoints.map(p => (
                 <ReferenceLine key={p.t} x={p.label} stroke="#ef4444" strokeDasharray="3 3" />

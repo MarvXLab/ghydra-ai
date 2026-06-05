@@ -190,7 +190,6 @@ function CodeSnippets({ dark }: { dark: boolean }) {
   const [lang, setLang] = useState('JavaScript')
   const [copied, setCopied] = useState(false)
   const langs = Object.keys(SNIPPETS)
-  const text = dark ? 'text-slate-100' : 'text-gray-900'
   const muted = dark ? 'text-slate-400' : 'text-gray-500'
 
   function copy() {

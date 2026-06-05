@@ -31,7 +31,6 @@ export default function DevAnalytics() {
   )
 
   const threats = data?.recent_activity?.filter((s: any) => s.is_threat) ?? []
-  const clean = data?.recent_activity?.filter((s: any) => !s.is_threat) ?? []
 
   return (
     <AppLayout>

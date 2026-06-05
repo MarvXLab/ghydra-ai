@@ -18,6 +18,12 @@ export default function Settings() {
   const fileRef = useRef<HTMLInputElement>(null)
 
   const [tab, setTab] = useState<'profile' | 'devices' | 'security' | 'about'>('profile')
+  const topRef = useRef<HTMLDivElement>(null)
+
+  function switchTab(t: typeof tab) {
+    setTab(t)
+    setTimeout(() => topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+  }
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [form, setForm] = useState({ full_name: '', username: '', bio: '', avatar_url: '' })
   const [devices, setDevices] = useState<Device[]>([])
@@ -94,7 +100,11 @@ export default function Settings() {
     try {
       const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, { method: 'POST', body: fd })
       const data = await res.json()
-      setForm(f => ({ ...f, avatar_url: data.secure_url }))
+      const newUrl = data.secure_url
+      setForm(f => ({ ...f, avatar_url: newUrl }))
+      // auto-save to backend
+      await api.put('/auth/profile', { avatar_url: newUrl })
+      fetchProfile()
     } catch { setError('Avatar upload failed') }
     setUploadingAvatar(false)
   }
@@ -115,9 +125,9 @@ export default function Settings() {
           <h1 className={`text-xl font-bold mb-6 ${text}`}>Settings</h1>
 
           {/* Tabs */}
-          <div className={`flex gap-1 p-1 rounded-xl mb-6 ${dark ? 'bg-surface-800' : 'bg-gray-100'}`}>
+          <div ref={topRef} className={`flex gap-1 p-1 rounded-xl mb-6 ${dark ? 'bg-surface-800' : 'bg-gray-100'}`}>
             {tabs.map(t => (
-              <button key={t.id} onClick={() => setTab(t.id)}
+              <button key={t.id} onClick={() => switchTab(t.id)}
                 className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors
                   ${tab === t.id ? (dark ? 'bg-surface-600 text-slate-100' : 'bg-white text-gray-900 shadow-sm') : muted}`}>
                 {t.label}

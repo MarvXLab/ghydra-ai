@@ -32,29 +32,35 @@ export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState<any>(null)
+  const [backendOffline, setBackendOffline] = useState(false)
 
   useEffect(() => {
-    // Check authentication
     const token = localStorage.getItem('access_token')
-    const userData = localStorage.getItem('user')
-    
-    if (!token) {
-      navigate('/auth/login')
-      return
-    }
-
-    if (userData) setUser(JSON.parse(userData))
-    api.defaults.headers.common['Authorization'] = `Bearer ${token}`
-    
+    if (!token) { navigate('/auth/login'); return }
+    fetchUser()
     fetchDashboardStats()
   }, [navigate])
+
+  const fetchUser = async () => {
+    try {
+      const res = await api.get('/auth/me')
+      setUser(res.data)
+      // keep localStorage in sync
+      localStorage.setItem('user', JSON.stringify(res.data))
+    } catch {
+      const cached = localStorage.getItem('user')
+      if (cached) setUser(JSON.parse(cached))
+    }
+  }
 
   const fetchDashboardStats = async () => {
     try {
       const response = await api.get('/dashboard/stats')
       setStats(response.data)
+      setBackendOffline(false)
     } catch (error) {
       console.error('Failed to fetch stats:', error)
+      setBackendOffline(true)
     }
     setLoading(false)
   }
@@ -84,16 +90,29 @@ export default function Dashboard() {
     <AppLayout>
       <div className={`min-h-screen ${dark ? 'bg-surface-900' : 'bg-light-bg'} p-4 sm:p-6`}>
         
+        {/* Offline banner */}
+        {backendOffline && (
+          <div className="mb-4 px-4 py-3 rounded-xl bg-yellow-50 border border-yellow-200 flex items-center gap-3">
+            <svg className="w-4 h-4 text-yellow-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+            </svg>
+            <p className="text-sm text-yellow-700 flex-1">
+              Backend is not responding. Go to <a href="/settings" className="font-semibold underline">Settings → Security</a> and tap <span className="font-semibold">Test Connection</span> to diagnose.
+            </p>
+          </div>
+        )}
+
         {/* Header */}
         <div className="mb-6">
           <div className="flex items-center justify-between mb-2">
             <div>
               <h1 className={`text-xl sm:text-2xl font-bold ${dark ? 'text-slate-100' : 'text-light-text'}`}>
-                Welcome Back
+                Welcome back, {user?.full_name?.split(' ')[0] || user?.username || 'there'} 👋
               </h1>
               <p className={`text-sm ${dark ? 'text-slate-400' : 'text-light-muted'}`}>
-                {user?.full_name || 'User'}
+                {user?.email || ''}
               </p>
+            </div>
             </div>
             
             {/* Status Badge */}

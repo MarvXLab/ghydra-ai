@@ -109,7 +109,7 @@ export default function ThreatDashboard() {
   const sevLabel = (score: number) => score >= 0.7 ? 'Critical' : score >= 0.4 ? 'High' : 'Medium'
 
   const threats = stats?.recent_scans?.filter(s => s.is_threat) ?? []
-  const showTerminal = trainingStatus === 'training' || activating
+  const showTerminal = trainingStatus === 'training' || trainingStatus === 'error' || activating
 
   if (loading) return (
     <AppLayout>
@@ -172,16 +172,19 @@ export default function ThreatDashboard() {
               <span className="ml-auto text-xs font-mono text-accent">{progress}%</span>
             </div>
             <div className="h-48 overflow-y-auto p-4 font-mono text-xs text-green-400 bg-black/90 space-y-0.5">
-              {log.map((line, i) => <div key={i}>{line}</div>)}
-              {trainingStatus === 'training' && (
-                <div className="animate-pulse">█</div>
-              )}
+              {log.map((line, i) => <div key={i} className={line.startsWith('[error]') ? 'text-red-400' : ''}>{line}</div>)}
+              {trainingStatus === 'training' && <div className="animate-pulse">█</div>}
               <div ref={logEndRef} />
             </div>
-            {/* Progress bar */}
             <div className={`h-1 ${dark ? 'bg-surface-600' : 'bg-gray-200'}`}>
               <div className="h-1 bg-accent transition-all duration-500" style={{ width: `${progress}%` }} />
             </div>
+            {trainingStatus === 'error' && (
+              <div className="p-4 flex justify-center">
+                <button onClick={() => { setTrainingStatus('idle'); setLog([]); setProgress(0) }}
+                  className="text-sm text-accent hover:underline">← Try again</button>
+              </div>
+            )}
           </div>
         )}
 

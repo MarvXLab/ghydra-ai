@@ -1,9 +1,7 @@
-models/
 data/
 __pycache__/
 *.pyc
 *.pyo
 .env
 *.keras
-*.pkl
 *.h5

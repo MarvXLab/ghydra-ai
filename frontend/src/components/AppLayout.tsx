@@ -22,12 +22,6 @@ const NAV_ITEMS = [
     mobileLabel: 'Alerts'
   },
   { 
-    to: '/profile', 
-    label: 'Profile', 
-    icon: 'https://cdn-icons-png.flaticon.com/128/9131/9131646.png',
-    mobileLabel: 'Profile'
-  },
-  { 
     to: '/settings', 
     label: 'Settings', 
     icon: 'https://cdn-icons-png.flaticon.com/128/10229/10229188.png',

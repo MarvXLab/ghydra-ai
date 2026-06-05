@@ -42,8 +42,11 @@ class User(Base):
     google_id         = Column(String, unique=True, nullable=True)
     github_id         = Column(String, unique=True, nullable=True)
     avatar_url        = Column(String, nullable=True)
+    username          = Column(String, unique=True, nullable=True)
+    bio               = Column(String, nullable=True)
     otp_codes         = relationship("OTPCode", back_populates="user")
     scans             = relationship("Scan", back_populates="user")
+    devices           = relationship("Device", back_populates="user")
 
 class OTPCode(Base):
     __tablename__ = "otp_codes"
@@ -83,6 +86,19 @@ class ThreatIntelligence(Base):
     confidence     = Column(Float, nullable=False)
     is_active      = Column(Boolean, default=True)
     first_seen     = Column(DateTime(timezone=True), server_default=func.now())
+
+class Device(Base):
+    __tablename__ = "devices"
+    id          = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id     = Column(String, ForeignKey("users.id"), nullable=False)
+    device_name = Column(String, nullable=False)
+    device_type = Column(String, default="browser")
+    user_agent  = Column(String, nullable=True)
+    ip_address  = Column(String, nullable=True)
+    is_active   = Column(Boolean, default=True)
+    last_seen   = Column(DateTime(timezone=True), server_default=func.now())
+    created_at  = Column(DateTime(timezone=True), server_default=func.now())
+    user        = relationship("User", back_populates="devices")
 
 # ── Database connection (inlined) ─────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -249,6 +265,16 @@ class URLScanRequest(BaseModel):
 class DeviceScanRequest(BaseModel):
     user_agent: Optional[str] = ""
 
+class ProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+    username: Optional[str] = None
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+class DeviceLink(BaseModel):
+    device_name: str
+    device_type: str = "browser"
+
 # ── Routes ────────────────────────────────────────────────────────
 @app.get("/")
 @limiter.limit("60/minute")
@@ -357,6 +383,58 @@ async def dashboard_stats(request: Request, db: AsyncSession = Depends(get_db),
 async def threat_dashboard(request: Request, db: AsyncSession = Depends(get_db),
                             current_user: User = Depends(require_user)):
     return {"threat_map": [], "model_loaded": model_loaded}
+
+@app.get("/auth/me")
+async def get_me(current_user: User = Depends(require_user)):
+    return {"id": current_user.id, "email": current_user.email, "full_name": current_user.full_name,
+            "username": current_user.username, "bio": current_user.bio,
+            "avatar_url": current_user.avatar_url, "subscription_tier": current_user.subscription_tier,
+            "created_at": current_user.created_at.isoformat() if current_user.created_at else None}
+
+@app.put("/auth/profile")
+async def update_profile(data: ProfileUpdate, db: AsyncSession = Depends(get_db),
+                          current_user: User = Depends(require_user)):
+    if data.full_name is not None: current_user.full_name = data.full_name
+    if data.bio is not None: current_user.bio = data.bio
+    if data.avatar_url is not None: current_user.avatar_url = data.avatar_url
+    if data.username is not None:
+        ex = await db.execute(select(User).where(User.username == data.username, User.id != current_user.id))
+        if ex.scalar_one_or_none(): raise HTTPException(400, "Username already taken")
+        current_user.username = data.username
+    await db.commit(); await db.refresh(current_user)
+    return {"id": current_user.id, "email": current_user.email, "full_name": current_user.full_name,
+            "username": current_user.username, "bio": current_user.bio, "avatar_url": current_user.avatar_url}
+
+@app.get("/devices")
+async def list_devices(db: AsyncSession = Depends(get_db), current_user: User = Depends(require_user)):
+    r = await db.execute(select(Device).where(Device.user_id == current_user.id, Device.is_active == True))
+    devs = r.scalars().all()
+    return [{"id": d.id, "name": d.device_name, "type": d.device_type,
+             "last_seen": d.last_seen.isoformat(), "created_at": d.created_at.isoformat()} for d in devs]
+
+@app.post("/devices/link")
+async def link_device(data: DeviceLink, request: Request, db: AsyncSession = Depends(get_db),
+                      current_user: User = Depends(require_user)):
+    # Free tier: max 2 devices
+    if current_user.subscription_tier == "free":
+        r = await db.execute(select(Device).where(Device.user_id == current_user.id, Device.is_active == True))
+        if len(r.scalars().all()) >= 2:
+            raise HTTPException(403, "Free plan allows 2 devices. Upgrade to Pro for more.")
+    device = Device(user_id=current_user.id, device_name=data.device_name,
+                    device_type=data.device_type,
+                    user_agent=request.headers.get("user-agent", ""),
+                    ip_address=request.client.host)
+    db.add(device); await db.commit(); await db.refresh(device)
+    return {"id": device.id, "name": device.device_name, "created_at": device.created_at.isoformat()}
+
+@app.delete("/devices/{device_id}")
+async def unlink_device(device_id: str, db: AsyncSession = Depends(get_db),
+                         current_user: User = Depends(require_user)):
+    r = await db.execute(select(Device).where(Device.id == device_id, Device.user_id == current_user.id))
+    device = r.scalar_one_or_none()
+    if not device: raise HTTPException(404, "Device not found")
+    device.is_active = False; await db.commit()
+    return {"message": "Device unlinked"}
 
 # ── Google OAuth ──────────────────────────────────────────────────
 @app.get("/auth/google")

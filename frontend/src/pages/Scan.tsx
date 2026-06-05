@@ -318,12 +318,24 @@ export default function Scan() {
 
         {/* Detailed Results */}
         {result && (
-          <div className={`max-w-md mx-auto p-6 rounded-2xl
-            ${dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-gray-200'}`}>
-            
-            <h3 className={`font-semibold mb-4 ${dark ? 'text-slate-100' : 'text-gray-900'}`}>
-              Scan Results
-            </h3>
+          <div className={`max-w-md mx-auto p-6 rounded-2xl mb-6
+            ${result.is_threat
+              ? 'bg-red-50 border-2 border-red-400'
+              : dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-gray-200'}`}>
+
+            {result.is_threat && (
+              <div className="flex items-center gap-3 mb-4 pb-4 border-b border-red-200">
+                <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0 animate-pulse">
+                  <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="font-bold text-red-700">⚠ Threat Detected!</p>
+                  <p className="text-xs text-red-500">This site may be harmful. Do not proceed.</p>
+                </div>
+              </div>
+            )}
 
             {/* Threat Score */}
             <div className="mb-4">

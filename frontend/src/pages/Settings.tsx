@@ -354,19 +354,7 @@ export default function Settings() {
     } catch (e: any) { setDevOtpError(e.response?.data?.detail || 'Invalid code'); setDevStep('otp') }
   }
 
-  async function saveDevProfile() {
-    setDevSaving(true)
-    try {
-      await api.put('/developer/profile', {
-        ...devForm,
-        social_links: devForm.social_links.filter(s => s.trim())
-      })
-      setDevSaved(true); setTimeout(() => setDevSaved(false), 2500)
-      setDevStep('projects')
-      await fetchProfile()
-    } catch (e: any) { setError(e.response?.data?.detail || 'Failed to save') }
-    setDevSaving(false)
-  }
+  async function deleteProject(id: string) {
     try { await api.delete(`/developer/projects/${id}`); fetchProjects(); setDeleteModal(null); setDeleteConfirm('') }
     catch { /* ignore */ }
   }

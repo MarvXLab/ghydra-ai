@@ -199,6 +199,13 @@ def load_ml_model():
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Safely add new columns if they don't exist yet
+        for sql in [
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR UNIQUE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS bio VARCHAR",
+        ]:
+            try: await conn.execute(__import__('sqlalchemy').text(sql))
+            except Exception: pass
     load_ml_model()
     yield
     await engine.dispose()

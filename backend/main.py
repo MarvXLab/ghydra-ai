@@ -1,4 +1,6 @@
-import os, pickle, sys, secrets, uuid
+import os, pickle, sys, secrets, uuid, html, logging
+
+logger = logging.getLogger("ghydra")
 from datetime import datetime, timedelta, timezone
 from typing import Optional, AsyncGenerator
 from contextlib import asynccontextmanager
@@ -162,12 +164,15 @@ FROM_EMAIL = os.getenv("FROM_EMAIL", "noreply@ghydra.ai")
 
 async def send_otp_email(to_email: str, code: str, name: str) -> bool:
     if not BREVO_KEY:
-        print(f"[DEV] OTP for {to_email}: {code}")
+        logger.info("[DEV] OTP for %s: %s", to_email, code)
         return False
-    html = f"""<div style="font-family:sans-serif;max-width:500px;margin:auto;padding:40px">
+    # Escape user-controlled data before injecting into HTML (XSS fix)
+    safe_name = html.escape(str(name)[:100])
+    safe_code = html.escape(str(code))
+    email_html = f"""<div style="font-family:sans-serif;max-width:500px;margin:auto;padding:40px">
         <h2>Verify your Ghydra account</h2>
-        <p>Hi {name}, enter this code to verify your email:</p>
-        <div style="background:#3b82f6;color:white;font-family:monospace;font-size:28px;letter-spacing:8px;padding:20px;border-radius:8px;text-align:center">{code}</div>
+        <p>Hi {safe_name}, enter this code to verify your email:</p>
+        <div style="background:#3b82f6;color:white;font-family:monospace;font-size:28px;letter-spacing:8px;padding:20px;border-radius:8px;text-align:center">{safe_code}</div>
         <p style="color:#6b7280;font-size:13px">Expires in 10 minutes. If you didn't register, ignore this email.</p>
     </div>"""
     try:
@@ -177,12 +182,12 @@ async def send_otp_email(to_email: str, code: str, name: str) -> bool:
                 headers={"api-key": BREVO_KEY, "content-type": "application/json"},
                 json={"sender": {"name": "Ghydra Security", "email": FROM_EMAIL},
                       "to": [{"email": to_email}], "subject": "Verify your Ghydra account",
-                      "htmlContent": html},
+                      "htmlContent": email_html},
                 timeout=20.0
             )
             return r.status_code == 201
-    except Exception as e:
-        print(f"Email error: {e}")
+    except httpx.HTTPError as e:
+        logger.error("Email send failed: %s", e)
         return False
 
 # ── ML model ─────────────────────────────────────────────────────
@@ -217,7 +222,7 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS bio VARCHAR",
         ]:
             try: await conn.execute(__import__('sqlalchemy').text(sql))
-            except Exception: pass
+            except Exception as e: logger.warning("Migration warning: %s", e)
     load_ml_model()
     yield
     await engine.dispose()
@@ -259,10 +264,16 @@ async def get_current_user(
     if not creds: return None
     try:
         payload = verify_token(creds.credentials)
+        # verify token type to prevent refresh tokens being used as access tokens
+        if payload.get("type") != "access":
+            return None
         r = await db.execute(select(User).where(User.id == payload.get("sub")))
         u = r.scalar_one_or_none()
         return u if u and u.is_active else None
-    except Exception:
+    except HTTPException:
+        return None
+    except Exception as e:
+        logger.warning("Auth error: %s", e)
         return None
 
 async def require_user(u: User = Depends(get_current_user)) -> User:
@@ -407,7 +418,7 @@ async def verify_email(data: OTPVerify, request: Request, db: AsyncSession = Dep
 async def login(data: UserLogin, request: Request, db: AsyncSession = Depends(get_db)):
     r = await db.execute(select(User).where(User.email == data.email))
     user = r.scalar_one_or_none()
-    if not user or not verify_password(data.password, user.hashed_password):
+    if not user or not user.hashed_password or not verify_password(data.password, user.hashed_password):
         raise HTTPException(401, "Invalid email or password")
     if not user.is_verified: raise HTTPException(403, "Email not verified")
     return {"access_token": create_access_token({"sub": user.id, "email": user.email}),
@@ -477,7 +488,7 @@ async def scan_url(data: URLScanRequest, request: Request, db: AsyncSession = De
 @limiter.limit("20/minute")
 async def scan_device(data: DeviceScanRequest, request: Request, db: AsyncSession = Depends(get_db),
                       current_user: Optional[User] = Depends(get_current_user)):
-    ua = data.user_agent or request.headers.get("user-agent", "")
+    ua = (data.user_agent or request.headers.get("user-agent", ""))[:512]
     ip = request.client.host; score, flags = 0.0, []
     for sig in ["sqlmap", "nikto", "masscan", "nmap", "zgrab"]:
         if sig in ua.lower(): score += 0.6; flags.append(f"Suspicious agent: {sig}")
@@ -613,11 +624,32 @@ async def project_analytics(project_id: str, db: AsyncSession = Depends(get_db),
     return {"project": {"id": p.id, "name": p.name}, "total_requests": total,
             "threats_blocked": threats, "recent_activity": scans}
 
+# ── OAuth helpers ─────────────────────────────────────────────────
+from urllib.parse import quote as _quote
+
+def _safe_name(raw: str, maxlen: int = 100) -> str:
+    """Strip control characters and cap length for OAuth display names."""
+    import unicodedata
+    cleaned = "".join(c for c in raw if unicodedata.category(c) not in ("Cc", "Cf"))
+    return cleaned[:maxlen].strip() or "User"
+
+def _safe_avatar(url: str | None) -> str | None:
+    """Only accept HTTPS avatar URLs from known providers."""
+    if not url: return None
+    allowed = ("https://lh3.googleusercontent.com/", "https://avatars.githubusercontent.com/")
+    return url if any(url.startswith(p) for p in allowed) else None
+
 # ── Google OAuth ──────────────────────────────────────────────────
 @app.get("/auth/google")
 async def google_login():
     from fastapi.responses import RedirectResponse
-    params = f"client_id={GOOGLE_CLIENT_ID}&redirect_uri={BACKEND_URL}/auth/google/callback&response_type=code&scope=openid%20email%20profile"
+    import urllib.parse
+    params = urllib.parse.urlencode({
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": f"{BACKEND_URL}/auth/google/callback",
+        "response_type": "code",
+        "scope": "openid email profile"
+    })
     return RedirectResponse(f"https://accounts.google.com/o/oauth2/v2/auth?{params}")
 
 @app.get("/auth/google/callback")
@@ -625,33 +657,44 @@ async def google_callback(request: Request, db: AsyncSession = Depends(get_db)):
     code = request.query_params.get("code")
     if not code: raise HTTPException(400, "Missing code")
     from fastapi.responses import RedirectResponse
-    async with httpx.AsyncClient() as client:
-        token_r = await client.post("https://oauth2.googleapis.com/token", data={
-            "code": code, "client_id": GOOGLE_CLIENT_ID, "client_secret": GOOGLE_CLIENT_SECRET,
-            "redirect_uri": f"{BACKEND_URL}/auth/google/callback", "grant_type": "authorization_code"
-        })
-        token_data = token_r.json()
-        if "access_token" not in token_data:
-            raise HTTPException(400, "Google auth failed")
-        user_r = await client.get("https://www.googleapis.com/oauth2/v2/userinfo",
-                                   headers={"Authorization": f"Bearer {token_data['access_token']}"})
-        guser = user_r.json()
+    try:
+        async with httpx.AsyncClient() as client:
+            token_r = await client.post("https://oauth2.googleapis.com/token", data={
+                "code": code, "client_id": GOOGLE_CLIENT_ID, "client_secret": GOOGLE_CLIENT_SECRET,
+                "redirect_uri": f"{BACKEND_URL}/auth/google/callback", "grant_type": "authorization_code"
+            }, timeout=15.0)
+            token_data = token_r.json()
+            if "access_token" not in token_data:
+                raise HTTPException(400, "Google auth failed")
+            user_r = await client.get("https://www.googleapis.com/oauth2/v2/userinfo",
+                                       headers={"Authorization": f"Bearer {token_data['access_token']}"},
+                                       timeout=15.0)
+            guser = user_r.json()
+    except httpx.HTTPError as e:
+        logger.error("Google OAuth error: %s", e)
+        raise HTTPException(502, "OAuth provider unreachable")
+    if not guser.get("email") or not guser.get("id"):
+        raise HTTPException(400, "Incomplete Google profile")
     r = await db.execute(select(User).where(User.google_id == guser["id"]))
     user = r.scalar_one_or_none()
     if not user:
         er = await db.execute(select(User).where(User.email == guser["email"]))
         user = er.scalar_one_or_none()
         if user:
-            user.google_id = guser["id"]; user.avatar_url = guser.get("picture")
+            user.google_id = guser["id"]
+            user.avatar_url = _safe_avatar(guser.get("picture"))
         else:
-            user = User(email=guser["email"], full_name=guser.get("name", ""),
-                        google_id=guser["id"], avatar_url=guser.get("picture"),
+            user = User(email=guser["email"], full_name=_safe_name(guser.get("name", "")),
+                        google_id=guser["id"], avatar_url=_safe_avatar(guser.get("picture")),
                         is_verified=True, api_key=generate_api_key())
             db.add(user)
         await db.commit(); await db.refresh(user)
     access_token = create_access_token({"sub": user.id, "email": user.email})
     refresh_token = create_refresh_token({"sub": user.id})
-    return RedirectResponse(f"{FRONTEND_URL}/auth/callback?access_token={access_token}&refresh_token={refresh_token}")
+    # URL-encode tokens before placing in redirect to prevent open redirect injection
+    return RedirectResponse(
+        f"{FRONTEND_URL}/auth/callback?access_token={_quote(access_token, safe='')}&refresh_token={_quote(refresh_token, safe='')}"
+    )
 
 # ── Model training endpoints ─────────────────────────────────────
 import threading
@@ -726,34 +769,47 @@ async def github_callback(request: Request, db: AsyncSession = Depends(get_db)):
     code = request.query_params.get("code")
     if not code: raise HTTPException(400, "Missing code")
     from fastapi.responses import RedirectResponse
-    async with httpx.AsyncClient() as client:
-        token_r = await client.post("https://github.com/login/oauth/access_token",
-                                     headers={"Accept": "application/json"},
-                                     data={"client_id": GITHUB_CLIENT_ID, "client_secret": GITHUB_CLIENT_SECRET, "code": code})
-        token_data = token_r.json()
-        if "access_token" not in token_data:
-            raise HTTPException(400, "GitHub auth failed")
-        gh_token = token_data["access_token"]
-        user_r  = await client.get("https://api.github.com/user",
-                                    headers={"Authorization": f"Bearer {gh_token}"})
-        email_r = await client.get("https://api.github.com/user/emails",
-                                    headers={"Authorization": f"Bearer {gh_token}"})
-        guser = user_r.json()
-        emails = email_r.json()
-    primary_email = next((e["email"] for e in emails if e.get("primary")), guser.get("email", ""))
+    try:
+        async with httpx.AsyncClient() as client:
+            token_r = await client.post("https://github.com/login/oauth/access_token",
+                                         headers={"Accept": "application/json"},
+                                         data={"client_id": GITHUB_CLIENT_ID, "client_secret": GITHUB_CLIENT_SECRET, "code": code},
+                                         timeout=15.0)
+            token_data = token_r.json()
+            if "access_token" not in token_data:
+                raise HTTPException(400, "GitHub auth failed")
+            gh_token = token_data["access_token"]
+            user_r  = await client.get("https://api.github.com/user",
+                                        headers={"Authorization": f"Bearer {gh_token}"}, timeout=15.0)
+            email_r = await client.get("https://api.github.com/user/emails",
+                                        headers={"Authorization": f"Bearer {gh_token}"}, timeout=15.0)
+            guser = user_r.json()
+            emails = email_r.json() if isinstance(email_r.json(), list) else []
+    except httpx.HTTPError as e:
+        logger.error("GitHub OAuth error: %s", e)
+        raise HTTPException(502, "OAuth provider unreachable")
+    if not guser.get("id"):
+        raise HTTPException(400, "Incomplete GitHub profile")
+    primary_email = next((e["email"] for e in emails if e.get("primary") and e.get("verified")), guser.get("email", ""))
+    if not primary_email:
+        raise HTTPException(400, "No verified email on GitHub account")
     r = await db.execute(select(User).where(User.github_id == str(guser["id"])))
     user = r.scalar_one_or_none()
     if not user:
         er = await db.execute(select(User).where(User.email == primary_email))
         user = er.scalar_one_or_none()
         if user:
-            user.github_id = str(guser["id"]); user.avatar_url = guser.get("avatar_url")
+            user.github_id = str(guser["id"])
+            user.avatar_url = _safe_avatar(guser.get("avatar_url"))
         else:
-            user = User(email=primary_email, full_name=guser.get("name") or guser.get("login", ""),
-                        github_id=str(guser["id"]), avatar_url=guser.get("avatar_url"),
+            user = User(email=primary_email,
+                        full_name=_safe_name(guser.get("name") or guser.get("login", "")),
+                        github_id=str(guser["id"]), avatar_url=_safe_avatar(guser.get("avatar_url")),
                         is_verified=True, api_key=generate_api_key())
             db.add(user)
         await db.commit(); await db.refresh(user)
     access_token = create_access_token({"sub": user.id, "email": user.email})
     refresh_token = create_refresh_token({"sub": user.id})
-    return RedirectResponse(f"{FRONTEND_URL}/auth/callback?access_token={access_token}&refresh_token={refresh_token}")
+    return RedirectResponse(
+        f"{FRONTEND_URL}/auth/callback?access_token={_quote(access_token, safe='')}&refresh_token={_quote(refresh_token, safe='')}"
+    )

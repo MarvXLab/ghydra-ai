@@ -113,8 +113,6 @@ export default function Dashboard() {
                 {user?.email || ''}
               </p>
             </div>
-            </div>
-            
             {/* Status Badge */}
             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border
               ${stats?.model_status === 'active'

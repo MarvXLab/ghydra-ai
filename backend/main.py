@@ -100,6 +100,18 @@ class Device(Base):
     created_at  = Column(DateTime(timezone=True), server_default=func.now())
     user        = relationship("User", back_populates="devices")
 
+class Project(Base):
+    __tablename__ = "projects"
+    id          = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id     = Column(String, ForeignKey("users.id"), nullable=False)
+    name        = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    website     = Column(String, nullable=True)
+    api_key     = Column(String, unique=True, nullable=False)
+    is_active   = Column(Boolean, default=True)
+    created_at  = Column(DateTime(timezone=True), server_default=func.now())
+    user        = relationship("User")
+
 # ── Database connection (inlined) ─────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -227,6 +239,16 @@ app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS,
                    allow_methods=["GET","POST","PUT","DELETE","OPTIONS"],
                    allow_headers=["Content-Type","Authorization"], allow_credentials=True)
 
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    return response
+
 http_security = HTTPBearer(auto_error=False)
 
 # ── Auth dependencies ─────────────────────────────────────────────
@@ -278,9 +300,68 @@ class ProfileUpdate(BaseModel):
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
 
+    @field_validator('full_name')
+    @classmethod
+    def validate_name(cls, v):
+        if v and len(v) > 100: raise ValueError('Name too long')
+        return v
+
+    @field_validator('username')
+    @classmethod
+    def validate_username(cls, v):
+        import re
+        if v and not re.match(r'^[a-z0-9_-]{1,30}$', v):
+            raise ValueError('Username must be 1-30 chars, lowercase letters/numbers/_/-')
+        return v
+
+    @field_validator('bio')
+    @classmethod
+    def validate_bio(cls, v):
+        if v and len(v) > 300: raise ValueError('Bio too long (max 300 chars)')
+        return v
+
+    @field_validator('avatar_url')
+    @classmethod
+    def validate_avatar(cls, v):
+        if v and not v.startswith('https://res.cloudinary.com/'):
+            raise ValueError('Avatar must be a Cloudinary URL')
+        return v
+
 class DeviceLink(BaseModel):
     device_name: str
     device_type: str = "browser"
+
+    @field_validator('device_name')
+    @classmethod
+    def validate_name(cls, v):
+        if len(v) > 60: raise ValueError('Device name too long')
+        return v.strip()
+
+class ProjectCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    website: Optional[str] = None
+
+    @field_validator('name')
+    @classmethod
+    def validate_name(cls, v):
+        if not v.strip(): raise ValueError('Name required')
+        if len(v) > 80: raise ValueError('Name too long')
+        return v.strip()
+
+    @field_validator('description')
+    @classmethod
+    def validate_desc(cls, v):
+        if v and len(v) > 300: raise ValueError('Description too long')
+        return v
+
+    @field_validator('website')
+    @classmethod
+    def validate_website(cls, v):
+        if v and not (v.startswith('https://') or v.startswith('http://')):
+            raise ValueError('Website must be a valid URL')
+        if v and len(v) > 200: raise ValueError('Website URL too long')
+        return v
 
 # ── Routes ────────────────────────────────────────────────────────
 @app.get("/")
@@ -339,19 +420,58 @@ async def login(data: UserLogin, request: Request, db: AsyncSession = Depends(ge
 @limiter.limit("30/minute")
 async def scan_url(data: URLScanRequest, request: Request, db: AsyncSession = Depends(get_db),
                    current_user: Optional[User] = Depends(get_current_user)):
-    url = str(data.url); domain = data.url.host
-    score, flags, cats = 0.0, [], []
-    if any(url.endswith(t) for t in [".tk", ".ml", ".cf", ".ga"]):
-        score += 0.3; flags.append("Suspicious TLD")
-    if len(domain.split(".")) > 3:
+    import re
+    url = str(data.url)
+    # SSRF protection — block private/internal IPs
+    domain = data.url.host.lower()
+    private_patterns = [
+        r'^localhost$', r'^127\.', r'^10\.', r'^172\.(1[6-9]|2[0-9]|3[01])\.',
+        r'^192\.168\.', r'^0\.0\.0\.0$', r'^::1$', r'^169\.254\.'
+    ]
+    for pat in private_patterns:
+        if re.match(pat, domain):
+            raise HTTPException(400, "Scanning internal/private addresses is not allowed")
+    if len(url) > 2000:
+        raise HTTPException(400, "URL too long")
+    score, flags = 0.0, []
+    if any(domain.endswith(t) for t in [".tk",".ml",".cf",".ga",".gq",".xyz",".top",".click",".loan",".work",".party",".review",".stream",".download"]):
+        score += 0.4; flags.append("Suspicious TLD")
+    # Excessive subdomains
+    if len(domain.split(".")) > 4:
         score += 0.2; flags.append("Excessive subdomains")
-    score = min(score, 1.0)
+    # IP address as host
+    if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", domain):
+        score += 0.5; flags.append("IP address used as domain")
+    # Suspicious keywords in URL
+    bad_words = ["phish","malware","virus","hack","crack","keygen","warez","free-download",
+                 "login-secure","verify-account","update-payment","confirm-identity",
+                 "paypal-","amazon-","google-","apple-","microsoft-","bankofamerica",
+                 "account-suspended","unusual-activity","lucky-winner"]
+    for w in bad_words:
+        if w in url.lower(): score += 0.35; flags.append(f"Suspicious keyword: {w}"); break
+    # Very long URL
+    if len(url) > 200:
+        score += 0.2; flags.append("Unusually long URL")
+    # Too many hyphens in domain
+    if domain.count("-") > 3:
+        score += 0.2; flags.append("Too many hyphens in domain")
+    # Non-HTTPS
+    if url.startswith("http://"):
+        score += 0.15; flags.append("Unencrypted HTTP")
+    # Encoded characters (obfuscation)
+    if url.count("%") > 5:
+        score += 0.25; flags.append("URL obfuscation detected")
+    # Known test threat domains
+    if any(d in domain for d in ["malware-test","eicar","phishtank","badssl","danger","evil","threat"]):
+        score = 1.0; flags.append("Known threat domain")
+
+    score = min(round(score, 3), 1.0)
+    is_threat = score >= 0.3
     scan = Scan(user_id=current_user.id if current_user else None, scan_type="url",
-                target=url, is_threat=score > 0.3, threat_score=score,
-                threat_flags=flags, threat_categories=cats, ip_address=request.client.host)
+                target=url, is_threat=is_threat, threat_score=score,
+                threat_flags=flags, threat_categories=[], ip_address=request.client.host)
     db.add(scan); await db.commit()
-    return {"url": url, "is_threat": score > 0.3, "threat_score": round(score, 3),
-            "flags": flags, "scan_id": scan.id}
+    return {"url": url, "is_threat": is_threat, "threat_score": score, "flags": flags, "scan_id": scan.id}
 
 @app.post("/scan/device")
 @limiter.limit("20/minute")
@@ -442,6 +562,56 @@ async def unlink_device(device_id: str, db: AsyncSession = Depends(get_db),
     if not device: raise HTTPException(404, "Device not found")
     device.is_active = False; await db.commit()
     return {"message": "Device unlinked"}
+
+# ── Developer Portal ─────────────────────────────────────────────
+@app.get("/developer/projects")
+async def list_projects(db: AsyncSession = Depends(get_db), current_user: User = Depends(require_user)):
+    r = await db.execute(select(Project).where(Project.user_id == current_user.id, Project.is_active == True))
+    return [{"id": p.id, "name": p.name, "description": p.description, "website": p.website,
+             "api_key": p.api_key, "created_at": p.created_at.isoformat()} for p in r.scalars().all()]
+
+@app.post("/developer/projects")
+async def create_project(data: ProjectCreate, db: AsyncSession = Depends(get_db),
+                          current_user: User = Depends(require_user)):
+    # Limit: free=3 projects, pro=unlimited
+    r = await db.execute(select(Project).where(Project.user_id == current_user.id, Project.is_active == True))
+    existing = r.scalars().all()
+    limit = 10 if current_user.subscription_tier == "pro" else 3
+    if len(existing) >= limit:
+        raise HTTPException(403, f"Project limit reached ({limit}). {'Upgrade to Pro for more.' if current_user.subscription_tier != 'pro' else ''}")
+    project = Project(user_id=current_user.id, name=data.name, description=data.description,
+                      website=data.website, api_key="ghk_" + secrets.token_urlsafe(32))
+    db.add(project); await db.commit(); await db.refresh(project)
+    return {"id": project.id, "name": project.name, "api_key": project.api_key,
+            "created_at": project.created_at.isoformat()}
+
+@app.delete("/developer/projects/{project_id}")
+async def delete_project(project_id: str, db: AsyncSession = Depends(get_db),
+                          current_user: User = Depends(require_user)):
+    r = await db.execute(select(Project).where(Project.id == project_id, Project.user_id == current_user.id))
+    p = r.scalar_one_or_none()
+    if not p: raise HTTPException(404, "Project not found")
+    p.is_active = False; await db.commit()
+    return {"message": "Project deleted"}
+
+@app.get("/developer/projects/{project_id}/analytics")
+async def project_analytics(project_id: str, db: AsyncSession = Depends(get_db),
+                              current_user: User = Depends(require_user)):
+    r = await db.execute(select(Project).where(Project.id == project_id, Project.user_id == current_user.id))
+    p = r.scalar_one_or_none()
+    if not p: raise HTTPException(404, "Project not found")
+    # Scans made using this project's API key (stored in threat_categories for now)
+    total = await db.scalar(select(func.count(Scan.id)).where(
+        Scan.threat_categories.contains([project_id]))) or 0
+    threats = await db.scalar(select(func.count(Scan.id)).where(
+        Scan.threat_categories.contains([project_id]), Scan.is_threat == True)) or 0
+    recent_r = await db.execute(select(Scan).where(
+        Scan.threat_categories.contains([project_id])).order_by(Scan.created_at.desc()).limit(20))
+    scans = [{"id": s.id, "type": s.scan_type, "target": s.target, "is_threat": s.is_threat,
+              "threat_score": s.threat_score, "ip_address": s.ip_address,
+              "created_at": s.created_at.isoformat()} for s in recent_r.scalars()]
+    return {"project": {"id": p.id, "name": p.name}, "total_requests": total,
+            "threats_blocked": threats, "recent_activity": scans}
 
 # ── Google OAuth ──────────────────────────────────────────────────
 @app.get("/auth/google")

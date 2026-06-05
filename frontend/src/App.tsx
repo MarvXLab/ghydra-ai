@@ -13,6 +13,7 @@ import ThreatDashboard from './pages/ThreatDashboard'
 import Network from './pages/Network'
 import Pricing from './pages/Pricing'
 import Settings from './pages/Settings'
+import DevAnalytics from './pages/DevAnalytics'
 
 // Protected Route component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -67,6 +68,12 @@ export default function App() {
           <Route path="/profile" element={
             <ProtectedRoute>
               <Settings />
+            </ProtectedRoute>
+          } />
+
+          <Route path="/developer/:projectId/analytics" element={
+            <ProtectedRoute>
+              <DevAnalytics />
             </ProtectedRoute>
           } />
 

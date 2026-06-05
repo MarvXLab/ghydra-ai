@@ -12,12 +12,228 @@ interface Device {
   id: string; name: string; type: string; last_seen: string; created_at: string
 }
 
+const SNIPPETS: Record<string, string> = {
+  HTML: `<!-- Add to your HTML page -->
+<script>
+async function scanUrl(url) {
+  const res = await fetch('https://ghydra-ai.onrender.com/scan/url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url })
+  });
+  const data = await res.json();
+  if (data.is_threat) {
+    alert('\u26a0\ufe0f Threat detected: ' + data.flags.join(', '));
+    return false; // block navigation
+  }
+  return true;
+}
+
+// Usage: call before any link click
+document.querySelectorAll('a').forEach(a => {
+  a.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const safe = await scanUrl(a.href);
+    if (safe) window.location.href = a.href;
+  });
+});
+</script>`,
+
+  JavaScript: `const GHYDRA_KEY = 'YOUR_API_KEY';
+const BASE = 'https://ghydra-ai.onrender.com';
+
+async function scanUrl(url) {
+  const res = await fetch(\`\${BASE}/scan/url\`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': \`Bearer \${GHYDRA_KEY}\`
+    },
+    body: JSON.stringify({ url })
+  });
+  return res.json();
+}
+
+async function scanDevice() {
+  const res = await fetch(\`\${BASE}/scan/device\`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': \`Bearer \${GHYDRA_KEY}\`
+    },
+    body: JSON.stringify({ user_agent: navigator.userAgent })
+  });
+  return res.json();
+}
+
+// Example
+scanUrl('https://suspicious-site.xyz').then(result => {
+  if (result.is_threat) {
+    console.warn('Threat detected!', result.flags);
+  }
+});`,
+
+  React: `import { useEffect, useState } from 'react';
+
+const GHYDRA_KEY = 'YOUR_API_KEY';
+
+export function useThreatScan(url: string) {
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!url) return;
+    setLoading(true);
+    fetch('https://ghydra-ai.onrender.com/scan/url', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': \`Bearer \${GHYDRA_KEY}\`
+      },
+      body: JSON.stringify({ url })
+    })
+    .then(r => r.json())
+    .then(data => { setResult(data); setLoading(false); });
+  }, [url]);
+
+  return { result, loading };
+}
+
+// Usage in a component:
+// const { result } = useThreatScan('https://example.com');
+// if (result?.is_threat) return <ThreatWarning flags={result.flags} />;`,
+
+  Python: `import httpx
+
+GHYDRA_KEY = 'YOUR_API_KEY'
+BASE_URL = 'https://ghydra-ai.onrender.com'
+
+def scan_url(url: str) -> dict:
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {GHYDRA_KEY}'
+    }
+    with httpx.Client() as client:
+        r = client.post(
+            f'{BASE_URL}/scan/url',
+            json={'url': url},
+            headers=headers
+        )
+    return r.json()
+
+def scan_device(user_agent: str) -> dict:
+    with httpx.Client() as client:
+        r = client.post(
+            f'{BASE_URL}/scan/device',
+            json={'user_agent': user_agent},
+            headers={'Authorization': f'Bearer {GHYDRA_KEY}'}
+        )
+    return r.json()
+
+# Example
+result = scan_url('https://suspicious-site.xyz')
+if result['is_threat']:
+    print(f"Threat detected! Flags: {result['flags']}")`,
+
+  'Node.js': `const GHYDRA_KEY = 'YOUR_API_KEY';
+const BASE = 'https://ghydra-ai.onrender.com';
+
+async function scanUrl(url) {
+  const res = await fetch(\`\${BASE}/scan/url\`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': \`Bearer \${GHYDRA_KEY}\`
+    },
+    body: JSON.stringify({ url })
+  });
+  return res.json();
+}
+
+// Express.js middleware example
+const express = require('express');
+const app = express();
+
+app.use(async (req, res, next) => {
+  const referer = req.headers.referer;
+  if (referer) {
+    const scan = await scanUrl(referer);
+    if (scan.is_threat) {
+      return res.status(403).json({ error: 'Blocked: threat detected', flags: scan.flags });
+    }
+  }
+  next();
+});`,
+
+  cURL: `# Scan a URL
+curl -X POST https://ghydra-ai.onrender.com/scan/url \\
+  -H 'Content-Type: application/json' \\
+  -H 'Authorization: Bearer YOUR_API_KEY' \\
+  -d '{"url": "https://suspicious-site.xyz"}'
+
+# Scan a device / IP
+curl -X POST https://ghydra-ai.onrender.com/scan/device \\
+  -H 'Content-Type: application/json' \\
+  -H 'Authorization: Bearer YOUR_API_KEY' \\
+  -d '{"user_agent": "Mozilla/5.0 ..."}'
+
+# Response format:
+# {
+#   "is_threat": true,
+#   "threat_score": 0.75,
+#   "flags": ["Suspicious TLD", "URL obfuscation detected"],
+#   "scan_id": "abc123"
+# }`
+}
+
+function CodeSnippets({ dark }: { dark: boolean }) {
+  const [lang, setLang] = useState('JavaScript')
+  const [copied, setCopied] = useState(false)
+  const langs = Object.keys(SNIPPETS)
+  const text = dark ? 'text-slate-100' : 'text-gray-900'
+  const muted = dark ? 'text-slate-400' : 'text-gray-500'
+
+  function copy() {
+    navigator.clipboard.writeText(SNIPPETS[lang])
+    setCopied(true); setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div>
+      {/* Lang tabs */}
+      <div className={`flex gap-0 border-b ${dark ? 'border-surface-400' : 'border-gray-200'} px-2 overflow-x-auto`}>
+        {langs.map(l => (
+          <button key={l} onClick={() => setLang(l)}
+            className={`px-3 py-2.5 text-xs font-medium border-b-2 whitespace-nowrap transition-colors
+              ${lang === l
+                ? 'border-accent text-accent'
+                : `border-transparent ${muted} hover:text-accent`}`}>
+            {l}
+          </button>
+        ))}
+      </div>
+      {/* Code block */}
+      <div className="relative">
+        <pre className={`text-xs font-mono p-4 overflow-x-auto leading-relaxed max-h-72
+          ${dark ? 'bg-surface-900 text-green-400' : 'bg-gray-50 text-gray-800'}`}>
+          {SNIPPETS[lang]}
+        </pre>
+        <button onClick={copy}
+          className={`absolute top-3 right-3 text-xs px-2.5 py-1 rounded-lg border transition-colors
+            ${dark ? 'border-surface-400 text-slate-400 hover:text-slate-100 bg-surface-800' : 'border-gray-200 text-gray-500 hover:text-gray-900 bg-white'}`}>
+          {copied ? 'Copied ✓' : 'Copy'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function Settings() {
   const { theme, toggle } = useTheme()
   const dark = theme === 'dark'
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const [tab, setTab] = useState<'profile' | 'devices' | 'security' | 'about'>('profile')
+  const [tab, setTab] = useState<'profile' | 'devices' | 'security' | 'developer' | 'about'>('profile')
   const topRef = useRef<HTMLDivElement>(null)
 
   function switchTab(t: typeof tab) {
@@ -34,6 +250,13 @@ export default function Settings() {
   const [linkingDevice, setLinkingDevice] = useState(false)
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [connStatus, setConnStatus] = useState<'idle'|'checking'|'ok'|'fail'>('idle')
+  const [projects, setProjects] = useState<any[]>([])
+  const [newProject, setNewProject] = useState({ name: '', description: '', website: '' })
+  const [creatingProject, setCreatingProject] = useState(false)
+  const [revealedKey, setRevealedKey] = useState<string | null>(null)
+  const [deleteModal, setDeleteModal] = useState<{ id: string; name: string } | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState('')
+  const DELETE_PHRASE = 'delete this project'
 
   const card = dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-gray-200'
   const text = dark ? 'text-slate-100' : 'text-gray-900'
@@ -42,7 +265,28 @@ export default function Settings() {
     ${dark ? 'bg-surface-900 border-surface-400 text-slate-100 focus:border-accent placeholder-slate-600'
            : 'bg-gray-50 border-gray-200 text-gray-900 focus:border-accent placeholder-gray-400'}`
 
-  useEffect(() => { fetchProfile(); fetchDevices() }, [])
+  useEffect(() => { fetchProfile(); fetchDevices(); fetchProjects() }, [])
+
+  async function fetchProjects() {
+    try { const res = await api.get('/developer/projects'); setProjects(res.data) }
+    catch { /* ignore */ }
+  }
+
+  async function createProject() {
+    if (!newProject.name.trim()) return
+    setCreatingProject(true)
+    try {
+      await api.post('/developer/projects', newProject)
+      setNewProject({ name: '', description: '', website: '' })
+      fetchProjects()
+    } catch (e: any) { setError(e.response?.data?.detail || 'Failed to create project') }
+    setCreatingProject(false)
+  }
+
+  async function deleteProject(id: string) {
+    try { await api.delete(`/developer/projects/${id}`); fetchProjects(); setDeleteModal(null); setDeleteConfirm('') }
+    catch { /* ignore */ }
+  }
 
   async function fetchProfile() {
     try {
@@ -115,6 +359,7 @@ export default function Settings() {
     { id: 'profile', label: 'Profile' },
     { id: 'devices', label: 'Devices' },
     { id: 'security', label: 'Security' },
+    { id: 'developer', label: 'Developer' },
     { id: 'about', label: 'About' },
   ] as const
 
@@ -124,11 +369,11 @@ export default function Settings() {
         <div className="max-w-2xl mx-auto">
           <h1 className={`text-xl font-bold mb-6 ${text}`}>Settings</h1>
 
-          {/* Tabs */}
-          <div ref={topRef} className={`flex gap-1 p-1 rounded-xl mb-6 ${dark ? 'bg-surface-800' : 'bg-gray-100'}`}>
+          {/* Tabs — scrollable on mobile */}
+          <div ref={topRef} className={`flex gap-1 p-1 rounded-xl mb-6 overflow-x-auto scrollbar-hide ${dark ? 'bg-surface-800' : 'bg-gray-100'}`}>
             {tabs.map(t => (
               <button key={t.id} onClick={() => switchTab(t.id)}
-                className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors
+                className={`flex-shrink-0 px-3 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap
                   ${tab === t.id ? (dark ? 'bg-surface-600 text-slate-100' : 'bg-white text-gray-900 shadow-sm') : muted}`}>
                 {t.label}
               </button>
@@ -339,6 +584,73 @@ export default function Settings() {
             </div>
           )}
 
+          {/* ── Developer Tab ── */}
+          {tab === 'developer' && (
+            <div className="space-y-4">
+              <div className={`${card} rounded-2xl p-6`}>
+                <h2 className={`font-semibold mb-1 ${text}`}>Developer Portal</h2>
+                <p className={`text-xs mb-5 ${muted}`}>Create a project to get an API key. Integrate Ghydra threat detection into your own apps.</p>
+
+                {/* Create project form */}
+                <div className="space-y-3 mb-6">
+                  <input value={newProject.name} onChange={e => setNewProject(p => ({...p, name: e.target.value}))}
+                    placeholder="Project name *" className={input} />
+                  <input value={newProject.description} onChange={e => setNewProject(p => ({...p, description: e.target.value}))}
+                    placeholder="Description (optional)" className={input} />
+                  <input value={newProject.website} onChange={e => setNewProject(p => ({...p, website: e.target.value}))}
+                    placeholder="Website URL (optional)" className={input} />
+                  <button onClick={createProject} disabled={creatingProject || !newProject.name.trim()}
+                    className="w-full bg-accent hover:bg-accent-dim disabled:opacity-50 text-white text-sm font-medium py-2.5 rounded-xl transition-colors">
+                    {creatingProject ? 'Creating...' : '+ Create Project'}
+                  </button>
+                </div>
+
+                {/* Project list */}
+                <div className="space-y-3">
+                  {projects.length === 0 ? (
+                    <p className={`text-sm text-center py-4 ${muted}`}>No projects yet.</p>
+                  ) : projects.map(p => (
+                    <div key={p.id} className={`rounded-xl p-4 ${dark ? 'bg-surface-700' : 'bg-gray-50'}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className={`font-medium text-sm ${text}`}>{p.name}</p>
+                          {p.website && <p className={`text-xs truncate ${muted}`}>{p.website}</p>}
+                          <div className="flex items-center gap-2 mt-2">
+                            <code className={`text-xs font-mono px-2 py-1 rounded ${dark ? 'bg-surface-900 text-green-400' : 'bg-gray-100 text-gray-700'}`}>
+                              {revealedKey === p.id ? p.api_key : 'ghk_••••••••••••••••'}
+                            </code>
+                            <button onClick={() => setRevealedKey(revealedKey === p.id ? null : p.id)}
+                              className={`text-xs ${muted} hover:text-accent transition-colors`}>
+                              {revealedKey === p.id ? 'Hide' : 'Reveal'}
+                            </button>
+                            <button onClick={() => navigator.clipboard.writeText(p.api_key)}
+                              className={`text-xs ${muted} hover:text-accent transition-colors`}>
+                              Copy
+                            </button>
+                          </div>
+                        </div>
+                        <button onClick={() => { setDeleteModal({ id: p.id, name: p.name }); setDeleteConfirm('') }}
+                          className="text-xs text-red-400 hover:text-red-600 shrink-0">Delete</button>
+                      </div>
+                      <a href={`/developer/${p.id}/analytics`}
+                        className="mt-3 flex items-center gap-1 text-xs text-accent hover:underline">
+                        View Analytics →
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className={`${card} rounded-2xl overflow-hidden`}>
+                <div className={`px-5 py-4 border-b ${dark ? 'border-surface-400' : 'border-gray-200'}`}>
+                  <h3 className={`font-semibold text-sm ${text}`}>Integration Guide</h3>
+                  <p className={`text-xs mt-0.5 ${muted}`}>Replace <code className="text-accent">YOUR_API_KEY</code> with your project key above.</p>
+                </div>
+                <CodeSnippets dark={dark} />
+              </div>
+            </div>
+          )}
+
           {/* ── About Tab ── */}
           {tab === 'about' && (
             <div className={`${card} rounded-2xl p-6`}>
@@ -357,6 +669,53 @@ export default function Settings() {
           )}
         </div>
       </div>
+
+      {/* ── Delete Confirmation Modal ── */}
+      {deleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className={`w-full max-w-md rounded-2xl p-6 shadow-2xl ${dark ? 'bg-surface-800 border border-surface-400' : 'bg-white border border-gray-200'}`}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center shrink-0">
+                <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className={`font-semibold ${text}`}>Delete project</h3>
+                <p className={`text-xs ${muted}`}>{deleteModal.name}</p>
+              </div>
+            </div>
+            <p className={`text-sm mb-1 ${muted}`}>
+              This will permanently delete the project and revoke its API key. Any apps using it will stop working.
+            </p>
+            <p className={`text-sm mb-4 ${text}`}>
+              Type <span className="font-mono text-red-500">{DELETE_PHRASE}</span> to confirm.
+            </p>
+            <input
+              value={deleteConfirm}
+              onChange={e => setDeleteConfirm(e.target.value)}
+              placeholder={DELETE_PHRASE}
+              className={`w-full px-3 py-2.5 rounded-xl text-sm outline-none border mb-4 transition-all
+                ${dark ? 'bg-surface-900 border-surface-400 text-slate-100 focus:border-red-500 placeholder-slate-600'
+                       : 'bg-gray-50 border-gray-200 text-gray-900 focus:border-red-500 placeholder-gray-400'}`}
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setDeleteModal(null); setDeleteConfirm('') }}
+                className={`flex-1 py-2.5 rounded-xl text-sm border transition-colors
+                  ${dark ? 'border-surface-400 text-slate-300 hover:bg-surface-600' : 'border-gray-200 text-gray-700 hover:bg-gray-50'}`}>
+                Cancel
+              </button>
+              <button
+                onClick={() => deleteProject(deleteModal.id)}
+                disabled={deleteConfirm !== DELETE_PHRASE}
+                className="flex-1 py-2.5 rounded-xl text-sm font-medium bg-red-500 hover:bg-red-600 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors">
+                Delete project
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppLayout>
   )
 }

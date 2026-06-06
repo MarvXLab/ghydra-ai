@@ -540,10 +540,16 @@ async def scan_url(data: URLScanRequest, request: Request, db: AsyncSession = De
         proj = pr.scalar_one_or_none()
         if proj:
             project_id = proj.id
-            ext = ExternalScan(project_id=proj.id, scan_type="url", target=url,
-                               is_threat=is_threat, threat_score=score, threat_flags=flags,
-                               ip_address=request.client.host,
-                               user_agent=request.headers.get("user-agent", "")[:512])
+            ext = ExternalScan(
+                project_id   = proj.id,
+                scan_type    = "url",
+                target       = url,
+                is_threat    = is_threat,
+                threat_score = score,
+                threat_flags = flags,
+                ip_address   = request.client.host,
+                user_agent   = request.headers.get("user-agent", "")[:512]
+            )
             db.add(ext)
 
     scan = Scan(user_id=current_user.id if current_user else None, scan_type="url",

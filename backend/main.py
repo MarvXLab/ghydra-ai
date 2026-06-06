@@ -120,6 +120,20 @@ class Project(Base):
     created_at  = Column(DateTime(timezone=True), server_default=func.now())
     user        = relationship("User")
 
+class ExternalScan(Base):
+    __tablename__ = "external_scans"
+    id           = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id   = Column(String, ForeignKey("projects.id"), nullable=False)
+    scan_type    = Column(String, nullable=False)
+    target       = Column(String, nullable=False)
+    is_threat    = Column(Boolean, nullable=False)
+    threat_score = Column(Float, nullable=False)
+    threat_flags = Column(JSON, default=list)
+    ip_address   = Column(String, nullable=True)
+    user_agent   = Column(Text, nullable=True)
+    created_at   = Column(DateTime(timezone=True), server_default=func.now())
+    project      = relationship("Project")
+
 # ── Database connection (inlined) ─────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -232,6 +246,7 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS company VARCHAR",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS location VARCHAR",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS social_links JSON DEFAULT '[]'",
+            "CREATE TABLE IF NOT EXISTS external_scans (id VARCHAR PRIMARY KEY, project_id VARCHAR REFERENCES projects(id), scan_type VARCHAR NOT NULL, target VARCHAR NOT NULL, is_threat BOOLEAN NOT NULL, threat_score FLOAT NOT NULL, threat_flags JSON DEFAULT '[]', ip_address VARCHAR, user_agent TEXT, created_at TIMESTAMPTZ DEFAULT NOW())",
         ]:
             try: await conn.execute(__import__('sqlalchemy').text(sql))
             except Exception as e: logger.warning("Migration warning: %s", e)
@@ -484,7 +499,6 @@ async def scan_url(data: URLScanRequest, request: Request, db: AsyncSession = De
                    current_user: Optional[User] = Depends(get_current_user)):
     import re
     url = str(data.url)
-    # SSRF protection — block private/internal IPs
     domain = data.url.host.lower()
     private_patterns = [
         r'^localhost$', r'^127\.', r'^10\.', r'^172\.(1[6-9]|2[0-9]|3[01])\.',
@@ -498,37 +512,40 @@ async def scan_url(data: URLScanRequest, request: Request, db: AsyncSession = De
     score, flags = 0.0, []
     if any(domain.endswith(t) for t in [".tk",".ml",".cf",".ga",".gq",".xyz",".top",".click",".loan",".work",".party",".review",".stream",".download"]):
         score += 0.4; flags.append("Suspicious TLD")
-    # Excessive subdomains
     if len(domain.split(".")) > 4:
         score += 0.2; flags.append("Excessive subdomains")
-    # IP address as host
     if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", domain):
         score += 0.5; flags.append("IP address used as domain")
-    # Suspicious keywords in URL
     bad_words = ["phish","malware","virus","hack","crack","keygen","warez","free-download",
                  "login-secure","verify-account","update-payment","confirm-identity",
                  "paypal-","amazon-","google-","apple-","microsoft-","bankofamerica",
                  "account-suspended","unusual-activity","lucky-winner"]
     for w in bad_words:
         if w in url.lower(): score += 0.35; flags.append(f"Suspicious keyword: {w}"); break
-    # Very long URL
-    if len(url) > 200:
-        score += 0.2; flags.append("Unusually long URL")
-    # Too many hyphens in domain
-    if domain.count("-") > 3:
-        score += 0.2; flags.append("Too many hyphens in domain")
-    # Non-HTTPS
-    if url.startswith("http://"):
-        score += 0.15; flags.append("Unencrypted HTTP")
-    # Encoded characters (obfuscation)
-    if url.count("%") > 5:
-        score += 0.25; flags.append("URL obfuscation detected")
-    # Known test threat domains
+    if len(url) > 200: score += 0.2; flags.append("Unusually long URL")
+    if domain.count("-") > 3: score += 0.2; flags.append("Too many hyphens in domain")
+    if url.startswith("http://"): score += 0.15; flags.append("Unencrypted HTTP")
+    if url.count("%") > 5: score += 0.25; flags.append("URL obfuscation detected")
     if any(d in domain for d in ["malware-test","eicar","phishtank","badssl","danger","evil","threat"]):
         score = 1.0; flags.append("Known threat domain")
-
     score = min(round(score, 3), 1.0)
     is_threat = score >= 0.3
+
+    # Check if request comes from a project API key (Authorization: Bearer ghk_...)
+    project_id = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer ghk_"):
+        candidate_key = auth_header[7:]
+        pr = await db.execute(select(Project).where(Project.api_key == candidate_key, Project.is_active == True))
+        proj = pr.scalar_one_or_none()
+        if proj:
+            project_id = proj.id
+            ext = ExternalScan(project_id=proj.id, scan_type="url", target=url,
+                               is_threat=is_threat, threat_score=score, threat_flags=flags,
+                               ip_address=request.client.host,
+                               user_agent=request.headers.get("user-agent", "")[:512])
+            db.add(ext)
+
     scan = Scan(user_id=current_user.id if current_user else None, scan_type="url",
                 target=url, is_threat=is_threat, threat_score=score,
                 threat_flags=flags, threat_categories=[], ip_address=request.client.host)
@@ -732,21 +749,44 @@ async def delete_project(project_id: str, db: AsyncSession = Depends(get_db),
 @app.get("/developer/projects/{project_id}/analytics")
 async def project_analytics(project_id: str, db: AsyncSession = Depends(get_db),
                               current_user: User = Depends(require_user)):
-    r = await db.execute(select(Project).where(Project.id == project_id, Project.user_id == current_user.id))
-    p = r.scalar_one_or_none()
+    pr = await db.execute(select(Project).where(Project.id == project_id, Project.user_id == current_user.id))
+    p = pr.scalar_one_or_none()
     if not p: raise HTTPException(404, "Project not found")
-    # Scans made using this project's API key (stored in threat_categories for now)
-    total = await db.scalar(select(func.count(Scan.id)).where(
-        Scan.threat_categories.contains([project_id]))) or 0
-    threats = await db.scalar(select(func.count(Scan.id)).where(
-        Scan.threat_categories.contains([project_id]), Scan.is_threat == True)) or 0
-    recent_r = await db.execute(select(Scan).where(
-        Scan.threat_categories.contains([project_id])).order_by(Scan.created_at.desc()).limit(20))
-    scans = [{"id": s.id, "type": s.scan_type, "target": s.target, "is_threat": s.is_threat,
-              "threat_score": s.threat_score, "ip_address": s.ip_address,
-              "created_at": s.created_at.isoformat()} for s in recent_r.scalars()]
-    return {"project": {"id": p.id, "name": p.name}, "total_requests": total,
-            "threats_blocked": threats, "recent_activity": scans}
+
+    total   = await db.scalar(select(func.count(ExternalScan.id)).where(ExternalScan.project_id == project_id)) or 0
+    threats = await db.scalar(select(func.count(ExternalScan.id)).where(
+        ExternalScan.project_id == project_id, ExternalScan.is_threat == True)) or 0
+
+    recent_r = await db.execute(select(ExternalScan).where(ExternalScan.project_id == project_id)
+                                 .order_by(ExternalScan.created_at.desc()).limit(100))
+    scans = [s for s in recent_r.scalars()]
+
+    # Top IPs
+    from collections import Counter
+    ip_counts    = Counter(s.ip_address for s in scans if s.ip_address)
+    ua_counts    = Counter(s.user_agent[:80] if s.user_agent else "Unknown" for s in scans)
+    path_counts  = Counter(s.target for s in scans)
+
+    # Traffic over time (last 24 data points)
+    chart = []
+    for s in reversed(scans[:48]):
+        chart.append({"t": s.created_at.isoformat(), "is_threat": s.is_threat})
+
+    activity = [{"id": s.id, "type": s.scan_type, "target": s.target, "is_threat": s.is_threat,
+                 "threat_score": s.threat_score, "flags": s.threat_flags,
+                 "ip_address": s.ip_address, "created_at": s.created_at.isoformat()} for s in scans[:20]]
+
+    return {
+        "project": {"id": p.id, "name": p.name, "website": p.website},
+        "total_requests": total,
+        "threats_blocked": threats,
+        "allowed": total - threats,
+        "top_ips":    [{"value": ip, "count": c} for ip, c in ip_counts.most_common(5)],
+        "top_agents": [{"value": ua, "count": c} for ua, c in ua_counts.most_common(5)],
+        "top_paths":  [{"value": p, "count": c} for p, c in path_counts.most_common(5)],
+        "chart": chart,
+        "recent_activity": activity,
+    }
 
 # ── OAuth helpers ─────────────────────────────────────────────────
 from urllib.parse import quote as _quote

@@ -270,7 +270,6 @@ export default function Settings() {
   })
   const [devSaving, setDevSaving] = useState(false)
   const [devSaved, setDevSaved] = useState(false)
-  // Project OTP gate
   type ProjStep = 'form' | 'sending' | 'otp' | 'verifying'
   const [projStep, setProjStep] = useState<ProjStep>('form')
   const [projOtp, setProjOtp] = useState('')
@@ -352,6 +351,20 @@ export default function Settings() {
       setDevStep('profile')
       await fetchProfile()
     } catch (e: any) { setDevOtpError(e.response?.data?.detail || 'Invalid code'); setDevStep('otp') }
+  }
+
+  async function saveDevProfile() {
+    setDevSaving(true)
+    try {
+      await api.put('/developer/profile', {
+        ...devForm,
+        social_links: devForm.social_links.filter(s => s.trim())
+      })
+      setDevSaved(true); setTimeout(() => setDevSaved(false), 2500)
+      setDevStep('projects')
+      await fetchProfile()
+    } catch (e: any) { setError(e.response?.data?.detail || 'Failed to save') }
+    setDevSaving(false)
   }
 
   async function deleteProject(id: string) {

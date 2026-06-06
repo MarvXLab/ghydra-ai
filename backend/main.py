@@ -440,6 +440,48 @@ class ProjectCreate(BaseModel):
         if v and len(v) > 200: raise ValueError('Website URL too long')
         return v
 
+# ── Debug (remove after confirming integration works) ────────────
+@app.get("/debug/ping")
+async def debug_ping(request: Request, db: AsyncSession = Depends(get_db)):
+    """Test endpoint — call with your ghk_ key to verify it registers in analytics."""
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer ghk_"):
+        return {"status": "no_project_key", "tip": "Add Authorization: Bearer ghk_YOUR_KEY header"}
+    candidate_key = auth_header[7:]
+    pr = await db.execute(select(Project).where(Project.api_key == candidate_key, Project.is_active == True))
+    proj = pr.scalar_one_or_none()
+    if not proj:
+        return {"status": "key_not_found", "key_prefix": candidate_key[:12] + "..."}
+    ext = ExternalScan(project_id=proj.id, scan_type="ping", target="/debug/ping",
+                       is_threat=False, threat_score=0.0, threat_flags=[],
+                       ip_address=request.client.host,
+                       user_agent=request.headers.get("user-agent", "")[:512])
+    db.add(ext); await db.commit()
+    return {"status": "ok", "project": proj.name, "recorded": True}
+
+# ── Page visit beacon — call this from any integrated site ────────
+class BeaconRequest(BaseModel):
+    page: str
+    referrer: Optional[str] = None
+
+@app.post("/beacon")
+@limiter.limit("120/minute")
+async def beacon(data: BeaconRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer ghk_"):
+        raise HTTPException(401, "Project API key required")
+    candidate_key = auth_header[7:]
+    pr = await db.execute(select(Project).where(Project.api_key == candidate_key, Project.is_active == True))
+    proj = pr.scalar_one_or_none()
+    if not proj: raise HTTPException(401, "Invalid API key")
+    page = data.page[:500] if data.page else "/"
+    ext = ExternalScan(project_id=proj.id, scan_type="pageview", target=page,
+                       is_threat=False, threat_score=0.0, threat_flags=[],
+                       ip_address=request.client.host,
+                       user_agent=request.headers.get("user-agent", "")[:512])
+    db.add(ext); await db.commit()
+    return {"recorded": True}
+
 # ── Routes ────────────────────────────────────────────────────────
 @app.get("/")
 @limiter.limit("60/minute")

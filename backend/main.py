@@ -259,7 +259,7 @@ app = FastAPI(title="Ghydra API", version="2.0.0", docs_url=None, redoc_url=None
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://ghydra-ai.pages.dev,http://localhost:5173").split(",")
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://ghydra-ai.pages.dev,http://localhost:5173,https://keyra.pages.dev").split(",")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://ghydra-ai.pages.dev")
 GOOGLE_CLIENT_ID     = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")

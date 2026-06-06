@@ -854,8 +854,14 @@ export default function Settings() {
                         <input value={newProject.description} onChange={e => setNewProject(p => ({...p, description: e.target.value}))}
                           placeholder="Description (optional)" className={input} />
                         <div>
-                          <input value={newProject.website} onChange={e => setNewProject(p => ({...p, website: e.target.value}))}
-                            placeholder="Website URL * (e.g. https://myapp.com)" className={input} />
+                          <input value={newProject.website}
+                          onChange={e => setNewProject(p => ({...p, website: e.target.value}))}
+                          onBlur={e => {
+                            const v = e.target.value.trim()
+                            if (v && !v.startsWith('http://') && !v.startsWith('https://'))
+                              setNewProject(p => ({...p, website: 'https://' + v}))
+                          }}
+                          placeholder="Website URL * (e.g. myapp.com)" className={input} />
                           <p className={`text-xs mt-1 ${muted}`}>Required — your site's origin will be automatically allowed by Ghydra.</p>
                         </div>
                         <button onClick={createProject} disabled={projStep === 'sending' || !newProject.name.trim() || !newProject.website.trim()}

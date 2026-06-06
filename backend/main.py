@@ -272,6 +272,38 @@ app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS,
                    allow_headers=["Content-Type","Authorization"], allow_credentials=True)
 
 @app.middleware("http")
+async def dynamic_cors(request: Request, call_next):
+    """Allow any origin that matches a registered project website, plus the static list."""
+    origin = request.headers.get("origin", "")
+    response = await call_next(request)
+    if not origin:
+        return response
+    # Already covered by CORSMiddleware static list
+    if origin in ALLOWED_ORIGINS:
+        return response
+    # Dynamically check against registered project websites
+    if origin:
+        try:
+            async with AsyncSessionLocal() as db:
+                r = await db.execute(
+                    select(Project).where(Project.is_active == True)
+                )
+                for proj in r.scalars().all():
+                    if proj.website:
+                        from urllib.parse import urlparse
+                        parsed = urlparse(proj.website)
+                        proj_origin = f"{parsed.scheme}://{parsed.netloc}"
+                        if origin == proj_origin or origin.rstrip('/') == proj.website.rstrip('/'):
+                            response.headers["Access-Control-Allow-Origin"] = origin
+                            response.headers["Access-Control-Allow-Credentials"] = "true"
+                            response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
+                            response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+                            return response
+        except Exception:
+            pass
+    return response
+
+@app.middleware("http")
 async def security_headers(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -415,7 +447,7 @@ class OTPCodeOnly(BaseModel):
 class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
-    website: Optional[str] = None
+    website: str  # required — used for dynamic CORS allowance
 
     otp_code: Optional[str] = None
 
@@ -435,10 +467,11 @@ class ProjectCreate(BaseModel):
     @field_validator('website')
     @classmethod
     def validate_website(cls, v):
-        if v and not (v.startswith('https://') or v.startswith('http://')):
-            raise ValueError('Website must be a valid URL')
-        if v and len(v) > 200: raise ValueError('Website URL too long')
-        return v
+        if not v or not v.strip(): raise ValueError('Website URL is required')
+        if not (v.startswith('https://') or v.startswith('http://')):
+            raise ValueError('Website must be a valid URL starting with http:// or https://')
+        if len(v) > 200: raise ValueError('Website URL too long')
+        return v.rstrip('/')
 
 # ── Debug (remove after confirming integration works) ────────────
 @app.get("/debug/ping")

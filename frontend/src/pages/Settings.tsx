@@ -853,9 +853,12 @@ export default function Settings() {
                           placeholder="Project name *" className={input} />
                         <input value={newProject.description} onChange={e => setNewProject(p => ({...p, description: e.target.value}))}
                           placeholder="Description (optional)" className={input} />
-                        <input value={newProject.website} onChange={e => setNewProject(p => ({...p, website: e.target.value}))}
-                          placeholder="Website URL (optional)" className={input} />
-                        <button onClick={createProject} disabled={projStep === 'sending' || !newProject.name.trim()}
+                        <div>
+                          <input value={newProject.website} onChange={e => setNewProject(p => ({...p, website: e.target.value}))}
+                            placeholder="Website URL * (e.g. https://myapp.com)" className={input} />
+                          <p className={`text-xs mt-1 ${muted}`}>Required — your site's origin will be automatically allowed by Ghydra.</p>
+                        </div>
+                        <button onClick={createProject} disabled={projStep === 'sending' || !newProject.name.trim() || !newProject.website.trim()}
                           className="w-full bg-accent hover:bg-accent-dim disabled:opacity-50 text-white text-sm font-medium py-2.5 rounded-xl transition-colors">
                           {projStep === 'sending' ? 'Sending verification code...' : '+ Create Project'}
                         </button>
